@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # MinIO Cloud Installation Script
-# สำหรับ Distributed Cluster (1 disk per node)
+# For Distributed Cluster (1 disk per node)
 #
 # Usage:
 #   sudo ./install.sh --node 1 --total 4 --ip 10.0.0.1
@@ -31,7 +31,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -73,7 +73,7 @@ parse_args() {
     [[ -z "$NODE_NUM" ]] && error "Missing --node"
     [[ -z "$TOTAL_NODES" ]] && error "Missing --total"
     [[ -z "$NODE_IP" ]] && error "Missing --ip"
-    
+
     # Validate values
     [[ "$TOTAL_NODES" -lt 4 ]] && error "Minimum 4 nodes required"
     [[ "$NODE_NUM" -gt "$TOTAL_NODES" ]] && error "Node number cannot exceed total nodes"
@@ -113,10 +113,10 @@ check_root() {
 # ============================
 install_deps() {
     log "Installing dependencies..."
-    
+
     apt-get update -qq
     apt-get install -y -qq curl wget ca-certificates xfsprogs
-    
+
     log "Dependencies installed"
 }
 
@@ -125,20 +125,20 @@ install_deps() {
 # ============================
 install_minio() {
     log "Installing MinIO..."
-    
+
     # Download latest MinIO
     MINIO_URL="https://dl.min.io/server/minio/release/linux-amd64/minio"
-    
+
     if [[ -f /usr/local/bin/minio ]]; then
         warn "MinIO binary already exists, updating..."
     fi
-    
+
     wget -q "$MINIO_URL" -O /usr/local/bin/minio
     chmod +x /usr/local/bin/minio
-    
+
     # Verify installation
     /usr/local/bin/minio --version
-    
+
     log "MinIO installed: $(/usr/local/bin/minio --version | head -1)"
 }
 
@@ -147,12 +147,12 @@ install_minio() {
 # ============================
 install_mc() {
     log "Installing MinIO Client (mc)..."
-    
+
     MC_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
-    
+
     wget -q "$MC_URL" -O /usr/local/bin/mc
     chmod +x /usr/local/bin/mc
-    
+
     log "MinIO Client installed"
 }
 
@@ -161,13 +161,13 @@ install_mc() {
 # ============================
 setup_data_dir() {
     log "Setting up data directory: ${DATA_PATH}..."
-    
+
     # Create directory
     mkdir -p "$DATA_PATH"
-    
+
     # Set permissions
     chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH" 2>/dev/null || true
-    
+
     log "Data directory ready"
 }
 
@@ -176,7 +176,7 @@ setup_data_dir() {
 # ============================
 create_user() {
     log "Creating MinIO user..."
-    
+
     if id "$MINIO_USER" &>/dev/null; then
         log "User ${MINIO_USER} already exists"
     else
@@ -184,7 +184,7 @@ create_user() {
         useradd -M -r -g "$MINIO_USER" "$MINIO_USER"
         log "User ${MINIO_USER} created"
     fi
-    
+
     # Set ownership
     chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH"
 }
@@ -194,13 +194,16 @@ create_user() {
 # ============================
 generate_hosts() {
     log "Generating /etc/hosts entries..."
-    
+
     # Backup
     cp /etc/hosts /etc/hosts.bak.$(date +%Y%m%d%H%M%S)
-    
+
     # Read IP mappings from config if exists
     if [[ -f "${SCRIPT_DIR}/config/nodes.txt" ]]; then
         while IFS='=' read -r node ip; do
+            # Skip comments and empty lines
+            [[ "$node" =~ ^#.*$ ]] && continue
+            [[ -z "$node" ]] && continue
             if ! grep -q "$node" /etc/hosts; then
                 echo "$ip $node" >> /etc/hosts
             fi
@@ -217,7 +220,7 @@ minio3=10.0.0.3
 minio4=10.0.0.4
 EOF
     fi
-    
+
     log "Hosts file configured"
 }
 
@@ -226,18 +229,18 @@ EOF
 # ============================
 create_config() {
     log "Creating MinIO configuration..."
-    
+
     # Generate volumes string for distributed mode
     # Format: http://minio{1...N}/data
     VOLUMES="http://minio{1...${TOTAL_NODES}}/data"
-    
+
     # Load credentials from config or use defaults
     if [[ -f "$CONFIG_FILE" ]]; then
         source "$CONFIG_FILE"
     else
         MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
         MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -base64 24)}"
-        
+
         # Save generated password
         mkdir -p "$(dirname "$CONFIG_FILE")"
         cat > "$CONFIG_FILE" << EOF
@@ -257,7 +260,7 @@ EOF
         chmod 600 "$CONFIG_FILE"
         warn "Generated new credentials. Save this file: ${CONFIG_FILE}"
     fi
-    
+
     # Create systemd environment file
     cat > /etc/default/minio << EOF
 # MinIO Distributed Configuration
@@ -281,9 +284,9 @@ MINIO_SITE_NAME=minio-cluster
 # Prometheus (optional)
 MINIO_PROMETHEUS_AUTH_TYPE=public
 EOF
-    
+
     chmod 600 /etc/default/minio
-    
+
     log "Configuration created at /etc/default/minio"
 }
 
@@ -292,7 +295,7 @@ EOF
 # ============================
 create_service() {
     log "Creating systemd service..."
-    
+
     cat > /etc/systemd/system/minio.service << 'EOF'
 [Unit]
 Description=MinIO Object Storage
@@ -331,7 +334,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable minio
-    
+
     log "Systemd service created and enabled"
 }
 
@@ -340,7 +343,7 @@ EOF
 # ============================
 tune_system() {
     log "Applying system tuning..."
-    
+
     # Sysctl
     cat > /etc/sysctl.d/99-minio.conf << 'EOF'
 # MinIO tuning
@@ -353,7 +356,7 @@ vm.dirty_background_ratio = 5
 fs.file-max = 1048576
 EOF
     sysctl -p /etc/sysctl.d/99-minio.conf 2>/dev/null || true
-    
+
     # Limits
     cat > /etc/security/limits.d/minio.conf << 'EOF'
 minio-user soft nofile 1048576
@@ -361,7 +364,7 @@ minio-user hard nofile 1048576
 minio-user soft nproc 65535
 minio-user hard nproc 65535
 EOF
-    
+
     log "System tuning applied"
 }
 
@@ -370,7 +373,7 @@ EOF
 # ============================
 setup_firewall() {
     log "Configuring firewall..."
-    
+
     if command -v ufw &> /dev/null; then
         ufw allow ${MINIO_PORT}/tcp comment 'MinIO API'
         ufw allow ${CONSOLE_PORT}/tcp comment 'MinIO Console'
@@ -420,14 +423,14 @@ print_summary() {
 # ============================
 main() {
     parse_args "$@"
-    
+
     echo ""
     echo "=========================================="
     echo "MinIO Cloud Installation"
     echo "Node: ${NODE_NUM} of ${TOTAL_NODES}"
     echo "=========================================="
     echo ""
-    
+
     check_root
     install_deps
     install_minio
