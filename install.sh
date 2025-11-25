@@ -20,6 +20,7 @@ NODE_NUM=""
 TOTAL_NODES=""
 NODE_IP=""
 DATA_PATH="/mnt/minio-data"
+DISK_SIZE_MB=20480  # 20GB default
 MINIO_USER="minio-user"
 MINIO_PORT=9000
 CONSOLE_PORT=9001
@@ -57,6 +58,10 @@ parse_args() {
                 ;;
             --data-path)
                 DATA_PATH="$2"
+                shift 2
+                ;;
+            --disk-size)
+                DISK_SIZE_MB="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -101,6 +106,7 @@ Options:
   --total      Total number of nodes in cluster
   --ip         Private IP of this node
   --data-path  Data directory (default: /mnt/minio-data)
+  --disk-size  Virtual disk size in MB (default: 20480 = 20GB)
   --help       Show this help
 
 Example:
@@ -164,6 +170,49 @@ install_mc() {
     chmod +x /usr/local/bin/mc
 
     log "MinIO Client installed"
+}
+
+# ============================
+# Setup Virtual Disk (Loopback)
+# ============================
+setup_virtual_disk() {
+    log "Setting up virtual disk for MinIO storage..."
+
+    DISK_IMG="/minio-disk.img"
+
+    # Check if already mounted
+    if mountpoint -q "$DATA_PATH"; then
+        log "Data path ${DATA_PATH} is already mounted"
+        return 0
+    fi
+
+    # Create disk image if not exists
+    if [[ ! -f "$DISK_IMG" ]]; then
+        log "Creating ${DISK_SIZE_MB}MB virtual disk..."
+        dd if=/dev/zero of="$DISK_IMG" bs=1M count="$DISK_SIZE_MB" status=progress
+        mkfs.xfs "$DISK_IMG"
+        log "Virtual disk created and formatted with XFS"
+    else
+        log "Virtual disk already exists: ${DISK_IMG}"
+    fi
+
+    # Create mount point
+    mkdir -p "$DATA_PATH"
+
+    # Mount
+    mount -o loop "$DISK_IMG" "$DATA_PATH"
+    log "Mounted ${DISK_IMG} to ${DATA_PATH}"
+
+    # Add to fstab for persistence
+    if ! grep -q "$DISK_IMG" /etc/fstab; then
+        echo "${DISK_IMG} ${DATA_PATH} xfs loop 0 0" >> /etc/fstab
+        log "Added to /etc/fstab for auto-mount on boot"
+    fi
+
+    # Set permissions
+    chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH"
+
+    log "Virtual disk setup complete"
 }
 
 # ============================
@@ -445,7 +494,7 @@ main() {
     install_deps
     install_minio
     install_mc
-    setup_data_dir
+    setup_virtual_disk
     create_user
     generate_hosts
     create_config
