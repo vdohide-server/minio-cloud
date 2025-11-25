@@ -11,6 +11,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/config/minio.env"
 
 # Colors
 RED='\033[0;31m'
@@ -28,6 +29,8 @@ error() { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 CURRENT_NODES=""
 NEW_START=""
 NEW_END=""
+DATA_PATH="/mnt/minio-data"
+DISK_SIZE_MB=20480
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -44,15 +47,40 @@ while [[ $# -gt 0 ]]; do
             NEW_END="$2"
             shift 2
             ;;
+        --data-path)
+            DATA_PATH="$2"
+            shift 2
+            ;;
+        --disk-size)
+            DISK_SIZE_MB="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: ./add-node.sh --current <count> --new-start <num> --new-end <num>"
+            echo ""
+            echo "Options:"
+            echo "  --current     Current number of nodes in cluster"
+            echo "  --new-start   First new node number"
+            echo "  --new-end     Last new node number"
+            echo "  --data-path   Data directory (default: /mnt/minio-data)"
+            echo "  --disk-size   Virtual disk size in MB (default: 20480)"
+            exit 0
+            ;;
         *)
             error "Unknown option: $1"
             ;;
     esac
 done
 
-[[ -z "$CURRENT_NODES" ]] && error "Missing --current (current node count)"
-[[ -z "$NEW_START" ]] && error "Missing --new-start (first new node number)"
-[[ -z "$NEW_END" ]] && error "Missing --new-end (last new node number)"
+if [[ -z "$CURRENT_NODES" ]]; then
+    error "Missing --current (current node count)"
+fi
+if [[ -z "$NEW_START" ]]; then
+    error "Missing --new-start (first new node number)"
+fi
+if [[ -z "$NEW_END" ]]; then
+    error "Missing --new-end (last new node number)"
+fi
 
 # ============================
 # Generate New Config
@@ -69,8 +97,8 @@ echo ""
 # Calculate new volume string
 # Pool 1: existing nodes
 # Pool 2: new nodes
-POOL1="http://minio{1...${CURRENT_NODES}}/data"
-POOL2="http://minio{${NEW_START}...${NEW_END}}/data"
+POOL1="http://minio{1...${CURRENT_NODES}}${DATA_PATH}"
+POOL2="http://minio{${NEW_START}...${NEW_END}}${DATA_PATH}"
 NEW_VOLUMES="${POOL1} ${POOL2}"
 
 log "New MINIO_VOLUMES configuration:"
@@ -87,8 +115,12 @@ NEW_CONFIG="/etc/default/minio.new"
 log "Backing up current config to ${BACKUP_FILE}"
 cp /etc/default/minio "$BACKUP_FILE"
 
-# Read current config and update volumes
-source /etc/default/minio
+# Load credentials from config
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+else
+    source /etc/default/minio
+fi
 
 cat > "$NEW_CONFIG" << EOF
 # MinIO Distributed Configuration
@@ -130,7 +162,7 @@ echo "   Run on each new node:"
 echo ""
 for i in $(seq $NEW_START $NEW_END); do
     echo "   # Node ${i}:"
-    echo "   sudo ./install.sh --node ${i} --total ${NEW_END} --ip <NODE_${i}_IP>"
+    echo "   sudo ./install.sh --node ${i} --total ${NEW_END} --ip <NODE_${i}_IP> --data-path ${DATA_PATH} --disk-size ${DISK_SIZE_MB}"
     echo ""
 done
 echo ""
