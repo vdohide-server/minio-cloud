@@ -70,13 +70,23 @@ parse_args() {
     done
 
     # Validate required args
-    [[ -z "$NODE_NUM" ]] && error "Missing --node"
-    [[ -z "$TOTAL_NODES" ]] && error "Missing --total"
-    [[ -z "$NODE_IP" ]] && error "Missing --ip"
+    if [[ -z "$NODE_NUM" ]]; then
+        error "Missing --node"
+    fi
+    if [[ -z "$TOTAL_NODES" ]]; then
+        error "Missing --total"
+    fi
+    if [[ -z "$NODE_IP" ]]; then
+        error "Missing --ip"
+    fi
 
     # Validate values
-    [[ "$TOTAL_NODES" -lt 4 ]] && error "Minimum 4 nodes required"
-    [[ "$NODE_NUM" -gt "$TOTAL_NODES" ]] && error "Node number cannot exceed total nodes"
+    if [[ "$TOTAL_NODES" -lt 4 ]]; then
+        error "Minimum 4 nodes required"
+    fi
+    if [[ "$NODE_NUM" -gt "$TOTAL_NODES" ]]; then
+        error "Node number cannot exceed total nodes"
+    fi
 }
 
 show_help() {
