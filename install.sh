@@ -445,8 +445,8 @@ main() {
     install_deps
     install_minio
     install_mc
-    create_user
     setup_data_dir
+    create_user
     generate_hosts
     create_config
     create_service
