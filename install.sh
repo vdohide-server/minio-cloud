@@ -241,8 +241,8 @@ create_config() {
     log "Creating MinIO configuration..."
 
     # Generate volumes string for distributed mode
-    # Format: http://minio{1...N}/data
-    VOLUMES="http://minio{1...${TOTAL_NODES}}/data"
+    # Format: http://minio{1...N}/mnt/minio-data
+    VOLUMES="http://minio{1...${TOTAL_NODES}}${DATA_PATH}"
 
     # Load credentials from config or use defaults
     if [[ -f "$CONFIG_FILE" ]]; then
