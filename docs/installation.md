@@ -58,7 +58,7 @@ echo '/dev/sdb /mnt/minio-data xfs defaults,noatime 0 2' | sudo tee -a /etc/fsta
 
 ```bash
 # บนทุก node
-git clone https://github.com/your-repo/minio-cloud.git
+git clone https://github.com//vdohide-server/minio-cloud.git
 cd minio-cloud
 chmod +x *.sh scripts/*.sh
 ```
