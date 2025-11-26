@@ -1,0 +1,76 @@
+# Node 1
+sudo ./install.sh --node 1 --total 4 --ip 10.0.0.3
+
+# Node 2 (SSH ไป node 2)
+sudo ./install.sh --node 2 --total 4 --ip 10.0.0.5
+
+# Node 3
+sudo ./install.sh --node 3 --total 4 --ip 10.0.0.4
+
+# Node 4
+sudo ./install.sh --node 4 --total 4 --ip 10.0.0.2
+
+git clone https://github.com//vdohide-server/minio-cloud.git
+cd minio-cloud
+chmod +x *.sh scripts/*.sh
+cp config/minio.env.template config/minio.env
+
+
+mkdir -p /home/files
+chown -R minio-user:minio-user /home/files
+
+sed -i 's|/mnt/minio-data|/home/files|g' /etc/default/minio
+
+systemctl restart minio
+
+systemctl status minio
+
+
+systemctl stop minio
+mv /usr/local/bin/minio /usr/local/bin/minio.backup
+wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE.2023-12-23T07-19-11Z -O /usr/local/bin/minio
+chmod +x /usr/local/bin/minio
+systemctl start minio
+
+
+cat > /etc/systemd/system/minio-console.service << 'EOF'
+[Unit]
+Description=MinIO Console
+After=network.target minio.service
+
+[Service]
+Type=simple
+Environment="CONSOLE_MINIO_SERVER=http://minio1:9000"
+Environment="CONSOLE_MINIO_REGION=cloud"
+ExecStart=/usr/local/bin/.console server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ย้าย binary ไปที่ถูกต้อง (ถ้ายังไม่ได้ย้าย)
+mv ./console /usr/local/bin/.console
+
+# Enable และ Start
+systemctl daemon-reload
+systemctl enable minio-console
+systemctl start minio-console
+
+# เช็คสถานะ
+systemctl status minio-console
+
+แล้ว Login ด้วย:
+Username: console
+Password: Console123!
+
+
+curl -s "http://138.201.62.171:8887/4c20969b-be41-41a8-af1c-b3276e34c9ff/file_original.mp4" | mc pipe myminio/files/4c20969b-be41-41a8-af1c-b3276e34c9ff/file_original.mp4
+
+mc ls myminio/files/4c20969b-be41-41a8-af1c-b3276e34c9ff
+
+
+curl -I http://127.0.0.1:9000/files/4c20969b-be41-41a8-af1c-b3276e34c9ff/file_original.mp4
+
+
