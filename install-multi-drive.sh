@@ -1,13 +1,18 @@
 #!/bin/bash
 #
 # MinIO Distributed Installation Script - Multi-Drive Edition
-# For 10 nodes with 4x 10TB HDD each (400TB raw, ~200TB usable)
+# สำหรับ Dedicated Servers ที่มีหลาย disk ต่อเครื่อง
 #
 # Usage:
-#   ./install-multi-drive.sh --node <number> --total <nodes> --ip <private-ip> --drives <count>
+#   ./install-multi-drive.sh --node <number> --ip <private-ip>
 #
-# Example:
-#   ./install-multi-drive.sh --node 1 --total 10 --ip 10.0.0.1 --drives 4
+# Example (4 servers x 4 disks):
+#   ./install-multi-drive.sh --node 1 --ip 10.0.0.1
+#
+# Config จะอ่านจาก pools.conf:
+#   - POOL1_DISKS=4        (จำนวน disk ต่อเครื่อง)
+#   - POOL1_PATH=/mnt/disk (mount path prefix)
+#   - POOL1_START/END      (range ของ node numbers)
 #
 
 set -e
@@ -20,13 +25,15 @@ CONFIG_FILE="${SCRIPT_DIR}/config/pools.conf"
 
 MINIO_USER="minio-user"
 MINIO_GROUP="minio-user"
+LOCAL_MINIO="${SCRIPT_DIR}/scripts/minio"
+LOCAL_MC="${SCRIPT_DIR}/scripts/mc"
 MINIO_BINARY_URL="https://dl.min.io/server/minio/release/linux-amd64/minio"
 MC_BINARY_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
 
-# Defaults (can be overridden by pools.conf)
+# Defaults (loaded from pools.conf)
 NODE_NUMBER=""
-TOTAL_NODES="10"
 PRIVATE_IP=""
+TOTAL_NODES="4"
 DRIVE_COUNT="4"
 MOUNT_PREFIX="/mnt/disk"
 
@@ -60,39 +67,11 @@ parse_args() {
                 NODE_NUMBER="$2"
                 shift 2
                 ;;
-            --total)
-                if [[ -z "$2" ]]; then
-                    log_error "--total requires a number"
-                fi
-                TOTAL_NODES="$2"
-                shift 2
-                ;;
             --ip)
                 if [[ -z "$2" ]]; then
                     log_error "--ip requires an IP address"
                 fi
                 PRIVATE_IP="$2"
-                shift 2
-                ;;
-            --drives)
-                if [[ -z "$2" ]]; then
-                    log_error "--drives requires a number"
-                fi
-                DRIVE_COUNT="$2"
-                shift 2
-                ;;
-            --user)
-                if [[ -z "$2" ]]; then
-                    log_error "--user requires a username"
-                fi
-                MINIO_ROOT_USER="$2"
-                shift 2
-                ;;
-            --password)
-                if [[ -z "$2" ]]; then
-                    log_error "--password requires a password"
-                fi
-                MINIO_ROOT_PASSWORD="$2"
                 shift 2
                 ;;
             --help)
@@ -114,24 +93,70 @@ parse_args() {
     fi
 }
 
+# ============================================
+# Load Pool Configuration
+# ============================================
+load_pool_config() {
+    log_info "Loading configuration from pools.conf..."
+    
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log_error "Config file not found: $CONFIG_FILE"
+    fi
+    
+    source "$CONFIG_FILE"
+    
+    # Find which pool this node belongs to
+    local found_pool=0
+    for pool in 1 2 3 4 5; do
+        local start_var="POOL${pool}_START"
+        local end_var="POOL${pool}_END"
+        local disks_var="POOL${pool}_DISKS"
+        local path_var="POOL${pool}_PATH"
+        
+        if [[ -n "${!start_var}" && -n "${!end_var}" ]]; then
+            if [[ $NODE_NUMBER -ge ${!start_var} && $NODE_NUMBER -le ${!end_var} ]]; then
+                POOL_NUMBER=$pool
+                POOL_START=${!start_var}
+                POOL_END=${!end_var}
+                DRIVE_COUNT=${!disks_var:-1}
+                MOUNT_PREFIX=${!path_var:-/mnt/disk}
+                TOTAL_NODES=$(( POOL_END - POOL_START + 1 ))
+                found_pool=1
+                break
+            fi
+        fi
+    done
+    
+    if [[ $found_pool -eq 0 ]]; then
+        log_error "Node $NODE_NUMBER not found in any pool in pools.conf"
+    fi
+    
+    log_success "Node $NODE_NUMBER is in Pool $POOL_NUMBER (nodes ${POOL_START}-${POOL_END}, ${DRIVE_COUNT} disks each)"
+}
+
 show_help() {
     echo "MinIO Multi-Drive Installation Script"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Required Options:"
-    echo "  --node NUMBER       Node number (1-10)"
+    echo "  --node NUMBER       Node number (from pools.conf)"
     echo "  --ip IP             Private IP address of this node"
     echo ""
     echo "Optional:"
-    echo "  --total NUMBER      Total number of nodes (default: 10)"
-    echo "  --drives NUMBER     Number of drives per node (default: 4)"
-    echo "  --user USERNAME     MinIO root username (default: admin)"
-    echo "  --password PASS     MinIO root password (default: ChangeMe123!)"
     echo "  --help              Show this help"
     echo ""
+    echo "Configuration is read from config/pools.conf:"
+    echo "  POOL1_START/END     Node number range"
+    echo "  POOL1_DISKS         Number of disks per node (default: 4)"
+    echo "  POOL1_PATH          Mount path prefix (default: /mnt/disk)"
+    echo ""
     echo "Example:"
-    echo "  $0 --node 1 --total 10 --ip 10.0.0.1 --drives 4"
+    echo "  # For 4 servers x 4 disks cluster"
+    echo "  $0 --node 1 --ip 10.0.0.1"
+    echo "  $0 --node 2 --ip 10.0.0.2"
+    echo "  $0 --node 3 --ip 10.0.0.3"
+    echo "  $0 --node 4 --ip 10.0.0.4"
     echo ""
     echo "Drive Setup (before running this script):"
     echo "  Mount drives as: /mnt/disk1, /mnt/disk2, /mnt/disk3, /mnt/disk4"
@@ -148,18 +173,47 @@ check_prerequisites() {
         log_error "This script must be run as root"
     fi
 
-    # Check drives are mounted
-    for i in $(seq 1 $DRIVE_COUNT); do
-        if ! mountpoint -q "${MOUNT_PREFIX}${i}" 2>/dev/null; then
-            log_warn "${MOUNT_PREFIX}${i} is not mounted"
+    # For multi-disk setup, check each drive is mounted
+    if [[ $DRIVE_COUNT -gt 1 ]]; then
+        local missing_drives=0
+        for i in $(seq 1 $DRIVE_COUNT); do
+            local mount_path="${MOUNT_PREFIX}${i}"
+            if ! mountpoint -q "${mount_path}" 2>/dev/null; then
+                log_warn "${mount_path} is not mounted"
+                missing_drives=1
+            else
+                log_success "${mount_path} is mounted"
+            fi
+        done
+        
+        if [[ $missing_drives -eq 1 ]]; then
             echo ""
-            echo "Please mount your drives first. Example:"
-            echo "  mkfs.xfs /dev/sda1"
-            echo "  mkdir -p ${MOUNT_PREFIX}${i}"
-            echo "  mount /dev/sda1 ${MOUNT_PREFIX}${i}"
+            echo "=========================================="
+            echo "DISK SETUP REQUIRED"
+            echo "=========================================="
             echo ""
-            echo "Add to /etc/fstab for persistence:"
-            echo "  /dev/sda1 ${MOUNT_PREFIX}1 xfs defaults,noatime 0 0"
+            echo "Mount your drives first. Example for 4x 10TB HDDs:"
+            echo ""
+            echo "  # Format drives (XFS recommended)"
+            echo "  mkfs.xfs -f /dev/sdb"
+            echo "  mkfs.xfs -f /dev/sdc"
+            echo "  mkfs.xfs -f /dev/sdd"
+            echo "  mkfs.xfs -f /dev/sde"
+            echo ""
+            echo "  # Create mount points"
+            echo "  mkdir -p /mnt/disk{1..4}"
+            echo ""
+            echo "  # Mount drives"
+            echo "  mount /dev/sdb /mnt/disk1"
+            echo "  mount /dev/sdc /mnt/disk2"
+            echo "  mount /dev/sdd /mnt/disk3"
+            echo "  mount /dev/sde /mnt/disk4"
+            echo ""
+            echo "  # Add to /etc/fstab for persistence:"
+            echo "  /dev/sdb /mnt/disk1 xfs defaults,noatime 0 0"
+            echo "  /dev/sdc /mnt/disk2 xfs defaults,noatime 0 0"
+            echo "  /dev/sdd /mnt/disk3 xfs defaults,noatime 0 0"
+            echo "  /dev/sde /mnt/disk4 xfs defaults,noatime 0 0"
             echo ""
             read -p "Continue anyway? (y/n) " -n 1 -r
             echo
@@ -167,7 +221,12 @@ check_prerequisites() {
                 exit 1
             fi
         fi
-    done
+    else
+        # Single disk setup
+        if [[ ! -d "$MOUNT_PREFIX" ]]; then
+            log_warn "${MOUNT_PREFIX} directory does not exist"
+        fi
+    fi
 
     log_success "Prerequisites check passed"
 }
@@ -192,16 +251,22 @@ create_user() {
 setup_drives() {
     log_info "Setting up drive directories..."
 
-    for i in $(seq 1 $DRIVE_COUNT); do
-        local drive_path="${MOUNT_PREFIX}${i}"
-        
-        # Create minio data directory on each drive
-        mkdir -p "${drive_path}/minio"
-        chown -R ${MINIO_USER}:${MINIO_GROUP} "${drive_path}/minio"
-        chmod 750 "${drive_path}/minio"
-        
-        log_success "Drive ${i}: ${drive_path}/minio ready"
-    done
+    if [[ $DRIVE_COUNT -gt 1 ]]; then
+        # Multi-disk: /mnt/disk1, /mnt/disk2, etc.
+        for i in $(seq 1 $DRIVE_COUNT); do
+            local drive_path="${MOUNT_PREFIX}${i}"
+            mkdir -p "${drive_path}"
+            chown -R ${MINIO_USER}:${MINIO_GROUP} "${drive_path}"
+            chmod 750 "${drive_path}"
+            log_success "Drive ${i}: ${drive_path} ready"
+        done
+    else
+        # Single disk: /mnt/minio-data
+        mkdir -p "${MOUNT_PREFIX}"
+        chown -R ${MINIO_USER}:${MINIO_GROUP} "${MOUNT_PREFIX}"
+        chmod 750 "${MOUNT_PREFIX}"
+        log_success "Drive: ${MOUNT_PREFIX} ready"
+    fi
 }
 
 # ============================================
@@ -211,13 +276,22 @@ install_minio() {
     log_info "Installing MinIO server..."
 
     if [[ -f /usr/local/bin/minio ]]; then
-        log_warn "MinIO already installed, updating..."
+        log_warn "MinIO already installed"
+        return
     fi
 
-    wget -q --show-progress "$MINIO_BINARY_URL" -O /usr/local/bin/minio
-    chmod +x /usr/local/bin/minio
-
-    log_success "MinIO installed"
+    # Try local binary first
+    if [[ -f "$LOCAL_MINIO" ]]; then
+        log_info "Using local MinIO binary..."
+        cp "$LOCAL_MINIO" /usr/local/bin/minio
+        chmod +x /usr/local/bin/minio
+        log_success "MinIO installed from local binary"
+    else
+        log_info "Downloading MinIO..."
+        wget -q --show-progress "$MINIO_BINARY_URL" -O /usr/local/bin/minio
+        chmod +x /usr/local/bin/minio
+        log_success "MinIO downloaded and installed"
+    fi
 }
 
 # ============================================
@@ -227,13 +301,22 @@ install_mc() {
     log_info "Installing MinIO client (mc)..."
 
     if [[ -f /usr/local/bin/mc ]]; then
-        log_warn "mc already installed, updating..."
+        log_warn "mc already installed"
+        return
     fi
 
-    wget -q --show-progress "$MC_BINARY_URL" -O /usr/local/bin/mc
-    chmod +x /usr/local/bin/mc
-
-    log_success "mc installed"
+    # Try local binary first
+    if [[ -f "$LOCAL_MC" ]]; then
+        log_info "Using local mc binary..."
+        cp "$LOCAL_MC" /usr/local/bin/mc
+        chmod +x /usr/local/bin/mc
+        log_success "mc installed from local binary"
+    else
+        log_info "Downloading mc..."
+        wget -q --show-progress "$MC_BINARY_URL" -O /usr/local/bin/mc
+        chmod +x /usr/local/bin/mc
+        log_success "mc downloaded and installed"
+    fi
 }
 
 # ============================================
@@ -242,19 +325,17 @@ install_mc() {
 configure_hosts() {
     log_info "Configuring /etc/hosts..."
 
-    # Load pools.conf
-    if [[ -f "$CONFIG_FILE" ]]; then
-        source "$CONFIG_FILE"
-    fi
-
-    # Add all node entries from pools.conf
-    for i in $(seq 1 20); do
-        IP_VAR="NODE${i}_IP"
-        if [[ -n "${!IP_VAR}" ]]; then
-            if ! grep -q "minio${i}" /etc/hosts; then
-                echo "${!IP_VAR} minio${i}" >> /etc/hosts
-                log_success "Added minio${i} (${!IP_VAR}) to /etc/hosts"
-            fi
+    # Add entries for all nodes in this pool
+    for i in $(seq $POOL_START $POOL_END); do
+        local ip_var="NODE${i}_IP"
+        local ip="${!ip_var}"
+        
+        if [[ -n "$ip" ]]; then
+            # Remove existing entry
+            sed -i "/minio${i}$/d" /etc/hosts
+            # Add new entry
+            echo "${ip} minio${i}" >> /etc/hosts
+            log_success "Added minio${i} -> ${ip}"
         fi
     done
 
@@ -267,24 +348,29 @@ configure_hosts() {
 create_env_file() {
     log_info "Creating MinIO environment file..."
 
-    # Load credentials from pools.conf
-    if [[ -f "$CONFIG_FILE" ]]; then
-        source "$CONFIG_FILE"
+    # Build volumes string based on disk count
+    local volumes=""
+    if [[ $DRIVE_COUNT -gt 1 ]]; then
+        # Multi-disk: http://minio{1...4}:9000/mnt/disk{1...4}
+        volumes="http://minio{${POOL_START}...${POOL_END}}:9000${MOUNT_PREFIX}{1...${DRIVE_COUNT}}"
+    else
+        # Single disk: http://minio{1...4}:9000/mnt/minio-data
+        volumes="http://minio{${POOL_START}...${POOL_END}}:9000${MOUNT_PREFIX}"
     fi
-
-    # Build volumes string: http://minio{1...N}:9000/mnt/disk{1...M}/minio
-    local volumes="http://minio{1...${TOTAL_NODES}}:9000${MOUNT_PREFIX}{1...${DRIVE_COUNT}}/minio"
+    
+    local total_drives=$((TOTAL_NODES * DRIVE_COUNT))
 
     cat > /etc/default/minio << EOF
 # MinIO Environment Configuration
-# Generated by install-multi-drive.sh for node ${NODE_NUMBER}
+# Generated by install-multi-drive.sh
+# Node: ${NODE_NUMBER} | Pool: ${POOL_NUMBER} (nodes ${POOL_START}-${POOL_END})
+# ${TOTAL_NODES} nodes x ${DRIVE_COUNT} drives = ${total_drives} total drives
 
 # Credentials
 MINIO_ROOT_USER=${MINIO_ROOT_USER}
 MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
 
 # Distributed cluster volumes
-# ${TOTAL_NODES} nodes x ${DRIVE_COUNT} drives = $((TOTAL_NODES * DRIVE_COUNT)) total drives
 MINIO_VOLUMES="${volumes}"
 
 # Server URL (this node)
@@ -298,16 +384,17 @@ MINIO_BROWSER_REDIRECT_URL="http://minio${NODE_NUMBER}:9001"
 MINIO_SITE_REGION=${MINIO_SITE_REGION:-cloud}
 MINIO_SITE_NAME=${MINIO_SITE_NAME:-minio-cluster}
 
-# Performance tuning for video storage
+# Performance tuning
 MINIO_API_REQUESTS_MAX=10000
 MINIO_API_REQUESTS_DEADLINE=2m
-
-# Metrics (optional - set to public for Prometheus)
-# MINIO_PROMETHEUS_AUTH_TYPE=public
 EOF
 
     chmod 600 /etc/default/minio
     log_success "Environment file created at /etc/default/minio"
+    
+    echo ""
+    echo "MINIO_VOLUMES = ${volumes}"
+    echo ""
 }
 
 # ============================================
@@ -316,7 +403,17 @@ EOF
 create_systemd_service() {
     log_info "Creating systemd service..."
 
-    cat > /etc/systemd/system/minio.service << 'EOF'
+    # Build ReadWritePaths based on disk count
+    local rw_paths=""
+    if [[ $DRIVE_COUNT -gt 1 ]]; then
+        for i in $(seq 1 $DRIVE_COUNT); do
+            rw_paths="${rw_paths} ${MOUNT_PREFIX}${i}"
+        done
+    else
+        rw_paths="${MOUNT_PREFIX}"
+    fi
+
+    cat > /etc/systemd/system/minio.service << EOF
 [Unit]
 Description=MinIO Object Storage
 Documentation=https://min.io/docs/minio/linux/index.html
@@ -332,7 +429,7 @@ User=minio-user
 Group=minio-user
 
 EnvironmentFile=-/etc/default/minio
-ExecStart=/usr/local/bin/minio server $MINIO_VOLUMES --console-address $MINIO_CONSOLE_ADDRESS
+ExecStart=/usr/local/bin/minio server \$MINIO_VOLUMES --console-address \$MINIO_CONSOLE_ADDRESS
 
 # Memory limits (adjust based on RAM)
 MemoryMax=24G
@@ -351,7 +448,7 @@ TimeoutStopSec=infinity
 
 # Security
 ProtectSystem=full
-ReadWritePaths=/mnt/disk1 /mnt/disk2 /mnt/disk3 /mnt/disk4
+ReadWritePaths=${rw_paths}
 
 [Install]
 WantedBy=multi-user.target
@@ -391,7 +488,13 @@ start_minio() {
 print_summary() {
     local total_drives=$((TOTAL_NODES * DRIVE_COUNT))
     local parity=$((total_drives / 2))
-    local raw_tb=$((TOTAL_NODES * DRIVE_COUNT * 10))  # assuming 10TB drives
+    
+    # Calculate capacity (assuming 10TB drives for dedicated servers)
+    local drive_size=10
+    if [[ $DRIVE_COUNT -eq 1 ]]; then
+        drive_size=1  # VPS typically 1TB or less
+    fi
+    local raw_tb=$((total_drives * drive_size))
     local usable_tb=$((raw_tb / 2))
 
     echo ""
@@ -399,20 +502,23 @@ print_summary() {
     echo -e "${GREEN}MinIO Node ${NODE_NUMBER} Installation Complete!${NC}"
     echo "============================================"
     echo ""
-    echo "Cluster Configuration:"
-    echo "  Nodes:           ${TOTAL_NODES}"
+    echo "Pool Configuration:"
+    echo "  Pool number:     ${POOL_NUMBER}"
+    echo "  Nodes:           ${POOL_START} - ${POOL_END} (${TOTAL_NODES} nodes)"
     echo "  Drives per node: ${DRIVE_COUNT}"
     echo "  Total drives:    ${total_drives}"
-    echo "  Erasure Coding:  EC:${parity}"
-    echo "  Raw capacity:    ~${raw_tb}TB"
-    echo "  Usable:          ~${usable_tb}TB"
-    echo "  Fault tolerance: ${parity} drives (or $((TOTAL_NODES/2)) full nodes)"
+    echo "  Erasure Coding:  EC:$((total_drives / 2))"
+    echo "  Fault tolerance: $((total_drives / 2)) drives"
     echo ""
     echo "This Node:"
     echo "  Node number:     ${NODE_NUMBER}"
     echo "  Private IP:      ${PRIVATE_IP}"
     echo "  Hostname:        minio${NODE_NUMBER}"
-    echo "  Drives:          ${MOUNT_PREFIX}1 - ${MOUNT_PREFIX}${DRIVE_COUNT}"
+    if [[ $DRIVE_COUNT -gt 1 ]]; then
+        echo "  Drives:          ${MOUNT_PREFIX}1 - ${MOUNT_PREFIX}${DRIVE_COUNT}"
+    else
+        echo "  Data path:       ${MOUNT_PREFIX}"
+    fi
     echo ""
     echo "URLs (after cluster is running):"
     echo "  S3 API:          http://minio${NODE_NUMBER}:9000"
@@ -422,12 +528,13 @@ print_summary() {
     echo "  Username:        ${MINIO_ROOT_USER}"
     echo "  Password:        ${MINIO_ROOT_PASSWORD}"
     echo ""
-    echo "Next Steps:"
-    echo "  1. Run this script on ALL other nodes"
-    echo "  2. Update /etc/hosts on ALL nodes with all IP mappings"
-    echo "  3. Start MinIO: systemctl start minio"
-    echo "  4. Check status: systemctl status minio"
-    echo "  5. Setup mc: mc alias set myminio http://minio1:9000 ${MINIO_ROOT_USER} '${MINIO_ROOT_PASSWORD}'"
+    echo -e "${YELLOW}Next Steps:${NC}"
+    echo "  1. Run this script on ALL other nodes (${POOL_START}-${POOL_END})"
+    echo "  2. Start MinIO on all nodes: systemctl start minio"
+    echo "  3. Check status: systemctl status minio"
+    echo "  4. Setup mc:"
+    echo "     mc alias set myminio http://minio${NODE_NUMBER}:9000 ${MINIO_ROOT_USER} '${MINIO_ROOT_PASSWORD}'"
+    echo "  5. Check cluster: mc admin info myminio"
     echo ""
 }
 
@@ -438,11 +545,11 @@ main() {
     echo ""
     echo "=========================================="
     echo "  MinIO Multi-Drive Installation Script"
-    echo "  For ${TOTAL_NODES} nodes with ${DRIVE_COUNT} drives each"
     echo "=========================================="
     echo ""
 
     parse_args "$@"
+    load_pool_config
     check_prerequisites
     create_user
     setup_drives

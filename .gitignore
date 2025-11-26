@@ -4,6 +4,7 @@ scripts/mc
 
 # Test files
 test.txt
+demo-test/
 
 # OS files
 .DS_Store
