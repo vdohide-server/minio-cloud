@@ -10,6 +10,12 @@ sudo ./install.sh --node 3 --total 4 --ip 10.0.0.4
 # Node 4
 sudo ./install.sh --node 4 --total 4 --ip 10.0.0.2
 
+cd minio-cloud
+git reset --hard
+git pull
+chmod +x *.sh scripts/*.sh
+
+
 # SSH ไป node 5
 sudo ./install.sh --node 5 --ip 10.0.0.8
 

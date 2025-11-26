@@ -1,16 +1,16 @@
 #!/bin/bash
 #
-# Update Existing Nodes with New Pool Configuration
+# Update MinIO Node Configuration
 #
-# ใช้สำหรับอัพเดท nodes เก่าเมื่อเพิ่ม pool ใหม่
+# อัพเดท config บน node ตัวเอง (ไม่ต้องใช้ SSH)
 # - อัพเดท /etc/hosts
 # - อัพเดท /etc/default/minio
 # - Restart MinIO service
 #
 # Usage:
-#   ./update-nodes.sh                    # อัพเดททุก node ตาม pools.conf
-#   ./update-nodes.sh --dry-run          # แสดงสิ่งที่จะทำ ไม่รันจริง
-#   ./update-nodes.sh --restart          # อัพเดทและ restart MinIO
+#   sudo ./update-nodes.sh                 # อัพเดท node นี้
+#   sudo ./update-nodes.sh --dry-run       # แสดงสิ่งที่จะทำ ไม่รันจริง
+#   sudo ./update-nodes.sh --restart       # อัพเดทและ restart MinIO
 #
 
 set -e
@@ -38,20 +38,19 @@ STOP_ONLY=false
 START_ONLY=false
 
 show_help() {
-    echo "Usage: ./update-nodes.sh [options]"
+    echo "Usage: sudo ./update-nodes.sh [options]"
     echo ""
-    echo "Update existing MinIO nodes with new pool configuration"
+    echo "Update this MinIO node with pool configuration from pools.conf"
     echo ""
     echo "Options:"
     echo "  --dry-run       Show what would be done without executing"
-    echo "  --restart       Update config and restart MinIO on all nodes"
-    echo "  --stop          Stop MinIO on all nodes"
-    echo "  --start         Start MinIO on all nodes"
+    echo "  --restart       Update config and restart MinIO"
+    echo "  --stop          Stop MinIO"
+    echo "  --start         Start MinIO"
     echo "  --help, -h      Show this help"
     echo ""
     echo "Files used:"
     echo "  config/pools.conf    Pool and node IP definitions"
-    echo "  config/minio.env     MinIO credentials"
     echo ""
     exit 0
 }
@@ -231,19 +230,11 @@ echo ""
 # Stop Only Mode
 # ============================
 if [[ "$STOP_ONLY" == true ]]; then
-    echo -e "${YELLOW}Stopping MinIO on all nodes...${NC}"
-    for i in "${ALL_NODES[@]}"; do
-        IP_VAR="NODE${i}_IP"
-        NODE_IP="${!IP_VAR}"
-        if [[ -n "$NODE_IP" ]]; then
-            echo "  Stopping minio${i} (${NODE_IP})..."
-            if [[ "$DRY_RUN" == false ]]; then
-                ssh -o StrictHostKeyChecking=no root@${NODE_IP} 'systemctl stop minio' || warn "Failed to stop minio${i}"
-            fi
-        fi
-    done
-    echo ""
-    log "All nodes stopped."
+    echo -e "${YELLOW}Stopping MinIO...${NC}"
+    if [[ "$DRY_RUN" == false ]]; then
+        systemctl stop minio || warn "Failed to stop minio"
+    fi
+    log "MinIO stopped."
     exit 0
 fi
 
@@ -251,20 +242,11 @@ fi
 # Start Only Mode
 # ============================
 if [[ "$START_ONLY" == true ]]; then
-    echo -e "${YELLOW}Starting MinIO on all nodes...${NC}"
-    for i in "${ALL_NODES[@]}"; do
-        IP_VAR="NODE${i}_IP"
-        NODE_IP="${!IP_VAR}"
-        if [[ -n "$NODE_IP" ]]; then
-            echo "  Starting minio${i} (${NODE_IP})..."
-            if [[ "$DRY_RUN" == false ]]; then
-                ssh -o StrictHostKeyChecking=no root@${NODE_IP} 'systemctl start minio' || warn "Failed to start minio${i}"
-                sleep 2
-            fi
-        fi
-    done
-    echo ""
-    log "All nodes started."
+    echo -e "${YELLOW}Starting MinIO...${NC}"
+    if [[ "$DRY_RUN" == false ]]; then
+        systemctl start minio || warn "Failed to start minio"
+    fi
+    log "MinIO started."
     exit 0
 fi
 
@@ -288,105 +270,57 @@ if [[ "$DRY_RUN" == true ]]; then
 fi
 
 # ============================
-# Create Temp Files
+# Update This Node
 # ============================
-HOSTS_FILE=$(mktemp)
-MINIO_CONFIG=$(mktemp)
-
-generate_hosts > "$HOSTS_FILE"
-generate_minio_config > "$MINIO_CONFIG"
-
-# ============================
-# Update All Nodes
-# ============================
-echo -e "${GREEN}Updating all nodes...${NC}"
+echo -e "${GREEN}Updating this node...${NC}"
 echo ""
 
-for i in "${ALL_NODES[@]}"; do
-    IP_VAR="NODE${i}_IP"
-    NODE_IP="${!IP_VAR}"
-    
-    if [[ -z "$NODE_IP" ]]; then
-        warn "No IP defined for minio${i}, skipping..."
-        continue
-    fi
-    
-    info "Updating minio${i} (${NODE_IP})..."
-    
-    # Update /etc/hosts
-    echo "  - Updating /etc/hosts..."
-    ssh -o StrictHostKeyChecking=no root@${NODE_IP} "
-        # Remove old minio entries
-        sed -i '/^.*minio[0-9]*/d' /etc/hosts
-        # Add new entries
-        cat >> /etc/hosts << 'HOSTS_EOF'
-$(cat $HOSTS_FILE)
-HOSTS_EOF
-    " || warn "Failed to update /etc/hosts on minio${i}"
-    
-    # Update /etc/default/minio
-    echo "  - Updating /etc/default/minio..."
-    scp -o StrictHostKeyChecking=no "$MINIO_CONFIG" root@${NODE_IP}:/etc/default/minio || warn "Failed to update minio config on minio${i}"
-    
-    echo ""
-done
+# Update /etc/hosts
+log "Updating /etc/hosts..."
+if [[ "$DRY_RUN" == false ]]; then
+    # Remove old minio entries
+    sed -i '/^.*minio[0-9]*/d' /etc/hosts
+    # Add new entries
+    generate_hosts >> /etc/hosts
+fi
 
-# Cleanup temp files
-rm -f "$HOSTS_FILE" "$MINIO_CONFIG"
+# Update /etc/default/minio
+log "Updating /etc/default/minio..."
+if [[ "$DRY_RUN" == false ]]; then
+    generate_minio_config > /etc/default/minio
+    chmod 600 /etc/default/minio
+fi
 
-log "All nodes updated!"
+log "Node updated!"
 echo ""
 
 # ============================
 # Restart if requested
 # ============================
 if [[ "$DO_RESTART" == true ]]; then
-    echo -e "${YELLOW}Restarting MinIO on all nodes...${NC}"
-    echo ""
+    echo -e "${YELLOW}Restarting MinIO...${NC}"
     
-    # Stop all nodes first
-    echo "Stopping all nodes..."
-    for i in "${ALL_NODES[@]}"; do
-        IP_VAR="NODE${i}_IP"
-        NODE_IP="${!IP_VAR}"
-        if [[ -n "$NODE_IP" ]]; then
-            ssh -o StrictHostKeyChecking=no root@${NODE_IP} 'systemctl stop minio' 2>/dev/null || true
-        fi
-    done
+    if [[ "$DRY_RUN" == false ]]; then
+        systemctl restart minio || warn "Failed to restart minio"
+    fi
     
-    sleep 3
-    
-    # Start all nodes
-    echo "Starting all nodes..."
-    for i in "${ALL_NODES[@]}"; do
-        IP_VAR="NODE${i}_IP"
-        NODE_IP="${!IP_VAR}"
-        if [[ -n "$NODE_IP" ]]; then
-            echo "  Starting minio${i}..."
-            ssh -o StrictHostKeyChecking=no root@${NODE_IP} 'systemctl start minio' || warn "Failed to start minio${i}"
-            sleep 2
-        fi
-    done
-    
-    echo ""
-    log "All nodes restarted!"
+    log "MinIO restarted!"
     echo ""
     echo "Verify cluster:"
     echo "  mc admin info myminio"
 else
     echo -e "${YELLOW}Next steps:${NC}"
     echo ""
-    echo "1. Stop all nodes:"
-    echo "   ./update-nodes.sh --stop"
+    echo "1. Restart MinIO:"
+    echo "   sudo systemctl restart minio"
     echo ""
-    echo "2. Start all nodes:"
-    echo "   ./update-nodes.sh --start"
+    echo "2. Or use:"
+    echo "   sudo ./update-nodes.sh --restart"
     echo ""
-    echo "3. Or restart all at once:"
-    echo "   ./update-nodes.sh --restart"
-    echo ""
-    echo "4. Verify cluster:"
+    echo "3. Verify cluster:"
     echo "   mc admin info myminio"
+    echo ""
+    echo -e "${YELLOW}Note: Run this script on ALL nodes!${NC}"
 fi
 
 echo ""
