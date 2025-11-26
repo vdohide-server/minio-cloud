@@ -4,6 +4,14 @@
 # ตรวจสอบสถานะของ MinIO Cluster
 #
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/../config/pools.conf"
+
+# Load config
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
 # Configuration
 MINIO_ALIAS="${1:-mycluster}"
 ALERT_EMAIL="${ALERT_EMAIL:-}"
@@ -109,19 +117,19 @@ fi
 echo ""
 echo "6. Checking network to other nodes..."
 
-if [[ -f "/etc/hosts" ]]; then
-    for i in 1 2 3 4; do
+# Check all nodes from pools.conf
+for i in $(seq 1 20); do
+    IP_VAR="NODE${i}_IP"
+    if [[ -n "${!IP_VAR}" ]]; then
+        IP="${!IP_VAR}"
         HOST="minio${i}"
-        if grep -q "$HOST" /etc/hosts; then
-            IP=$(grep "$HOST" /etc/hosts | awk '{print $1}' | head -1)
-            if ping -c 1 -W 2 "$IP" &> /dev/null; then
-                echo -e "   ${GREEN}✓${NC} ${HOST} ($IP) - reachable"
-            else
-                echo -e "   ${RED}✗${NC} ${HOST} ($IP) - NOT reachable!"
-            fi
+        if ping -c 1 -W 2 "$IP" &> /dev/null; then
+            echo -e "   ${GREEN}✓${NC} ${HOST} ($IP) - reachable"
+        else
+            echo -e "   ${RED}✗${NC} ${HOST} ($IP) - NOT reachable!"
         fi
-    done
-fi
+    fi
+done
 
 # ============================
 # Check Recent Errors

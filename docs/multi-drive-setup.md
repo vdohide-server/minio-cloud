@@ -1,240 +1,182 @@
-# MinIO Multi-Drive Cluster Setup Guide
-# 10 Nodes x 4 Drives (400TB raw, ~200TB usable)
+# MinIO Multi-Drive Setup Guide
 
 ## Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    MinIO 10-Node Cluster                                │
-│                    400TB Raw / ~200TB Usable                            │
-│                    EC:20 (can lose 20 drives or 5 full nodes)           │
-└─────────────────────────────────────────────────────────────────────────┘
+สำหรับ nodes ที่มีหลาย disk (เช่น 4x 10TB HDD)
 
-  Node 1          Node 2          Node 3    ...    Node 10
-┌─────────┐    ┌─────────┐    ┌─────────┐       ┌─────────┐
-│ disk1   │    │ disk1   │    │ disk1   │       │ disk1   │
-│ disk2   │    │ disk2   │    │ disk2   │       │ disk2   │
-│ disk3   │    │ disk3   │    │ disk3   │       │ disk3   │
-│ disk4   │    │ disk4   │    │ disk4   │       │ disk4   │
-└─────────┘    └─────────┘    └─────────┘       └─────────┘
-   40TB           40TB           40TB              40TB
+```
+  Node 1          Node 2          Node 3          Node 4
+┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
+│ disk1   │    │ disk1   │    │ disk1   │    │ disk1   │
+│ disk2   │    │ disk2   │    │ disk2   │    │ disk2   │
+│ disk3   │    │ disk3   │    │ disk3   │    │ disk3   │
+│ disk4   │    │ disk4   │    │ disk4   │    │ disk4   │
+└─────────┘    └─────────┘    └─────────┘    └─────────┘
+   40TB           40TB           40TB           40TB
+
+Total: 160TB raw, ~73TB usable (EC:8)
 ```
 
-## Prerequisites
+---
 
-Each node should have:
-- 4x 10TB HDD
-- Private network connectivity to other nodes
-- Ubuntu/Debian Linux
+## Step 1: Setup Drives
 
-## Step 1: Setup Network
-
-### Create Private Network
-
-On your cloud provider (Hetzner/etc), create a private network:
-- Network: 10.0.0.0/16
-- Attach all 10 servers
-
-### IP Allocation
-
-| Node | Private IP | Hostname |
-|------|------------|----------|
-| 1    | 10.0.0.1   | minio1   |
-| 2    | 10.0.0.2   | minio2   |
-| 3    | 10.0.0.3   | minio3   |
-| 4    | 10.0.0.4   | minio4   |
-| 5    | 10.0.0.5   | minio5   |
-| 6    | 10.0.0.6   | minio6   |
-| 7    | 10.0.0.7   | minio7   |
-| 8    | 10.0.0.8   | minio8   |
-| 9    | 10.0.0.9   | minio9   |
-| 10   | 10.0.0.10  | minio10  |
-
-## Step 2: Setup Drives (On Each Node)
+### 1.1 List Drives
 
 ```bash
-# Download scripts
-git clone https://github.com/vdohide-server/minio-cloud.git
-cd minio-cloud
-chmod +x *.sh scripts/*.sh
+lsblk
+# Example output:
+# sda     500G   ← OS disk
+# sdb     10T    ← Data disk 1
+# sdc     10T    ← Data disk 2
+# sdd     10T    ← Data disk 3
+# sde     10T    ← Data disk 4
+```
 
-# Setup drives (formats and mounts 4 HDDs)
+### 1.2 Auto Setup Drives
+
+```bash
+# ใช้ script
 sudo ./scripts/setup-drives.sh
+
+# เลือก 1) Auto-detect drives
+# Script จะ format และ mount ให้อัตโนมัติ
 ```
 
-This will:
-- Format drives as XFS
-- Mount to /mnt/disk1, /mnt/disk2, /mnt/disk3, /mnt/disk4
-- Add entries to /etc/fstab
+### 1.3 Manual Setup
 
-## Step 3: Install MinIO (On Each Node)
-
-### Node 1:
 ```bash
-sudo ./install-multi-drive.sh \
-  --node 1 \
-  --total 10 \
-  --ip 10.0.0.1 \
-  --drives 4 \
-  --user admin \
-  --password 'YourSecurePassword123!'
+# Format each drive
+sudo mkfs.xfs /dev/sdb
+sudo mkfs.xfs /dev/sdc
+sudo mkfs.xfs /dev/sdd
+sudo mkfs.xfs /dev/sde
+
+# Create mount points
+sudo mkdir -p /mnt/disk{1..4}
+
+# Mount
+sudo mount /dev/sdb /mnt/disk1
+sudo mount /dev/sdc /mnt/disk2
+sudo mount /dev/sdd /mnt/disk3
+sudo mount /dev/sde /mnt/disk4
+
+# Add to fstab
+echo '/dev/sdb /mnt/disk1 xfs defaults,noatime 0 0' | sudo tee -a /etc/fstab
+echo '/dev/sdc /mnt/disk2 xfs defaults,noatime 0 0' | sudo tee -a /etc/fstab
+echo '/dev/sdd /mnt/disk3 xfs defaults,noatime 0 0' | sudo tee -a /etc/fstab
+echo '/dev/sde /mnt/disk4 xfs defaults,noatime 0 0' | sudo tee -a /etc/fstab
 ```
 
-### Node 2:
-```bash
-sudo ./install-multi-drive.sh \
-  --node 2 \
-  --total 10 \
-  --ip 10.0.0.2 \
-  --drives 4 \
-  --user admin \
-  --password 'YourSecurePassword123!'
+---
+
+## Step 2: Configure pools.conf
+
+```properties
+# Pool with multiple disks per node
+POOL1_START=1
+POOL1_END=4
+POOL1_DISKS=4                    # ← 4 disks per node
+POOL1_PATH=/mnt/disk             # ← Base path (will become /mnt/disk{1...4})
+
+NODE1_IP=10.0.0.3
+NODE2_IP=10.0.0.5
+NODE3_IP=10.0.0.4
+NODE4_IP=10.0.0.2
 ```
 
-### Node 3-10:
-```bash
-# Repeat for nodes 3-10 with appropriate --node and --ip values
+**Result MINIO_VOLUMES:**
+```
+http://minio{1...4}:9000/mnt/disk{1...4}
 ```
 
-## Step 4: Configure /etc/hosts (On ALL Nodes)
+---
 
-Add to /etc/hosts on EVERY node:
+## Step 3: Install MinIO
 
 ```bash
-cat >> /etc/hosts << 'EOF'
-10.0.0.1  minio1
-10.0.0.2  minio2
-10.0.0.3  minio3
-10.0.0.4  minio4
-10.0.0.5  minio5
-10.0.0.6  minio6
-10.0.0.7  minio7
-10.0.0.8  minio8
-10.0.0.9  minio9
-10.0.0.10 minio10
-EOF
+# Node 1
+sudo ./install.sh --node 1 --ip 10.0.0.3
+
+# Node 2
+sudo ./install.sh --node 2 --ip 10.0.0.5
+
+# ... repeat for all nodes
 ```
 
-## Step 5: Start Cluster
+---
 
-On ALL nodes (can run simultaneously):
-
-```bash
-sudo systemctl start minio
-sudo systemctl status minio
-```
-
-## Step 6: Verify Cluster
+## Step 4: Start Cluster
 
 ```bash
-# Setup mc
-mc alias set myminio http://minio1:9000 admin 'YourSecurePassword123!'
+./update-nodes.sh --start
 
-# Check cluster health
+# Verify
 mc admin info myminio
-
-# Expected output:
-#   10 Online, 0 Offline
-#   40 drives, EC:20
+# Should show: 16 drives (4 nodes x 4 disks)
 ```
 
-## Step 7: Create Buckets
+---
 
-```bash
-# Create a bucket for videos
-mc mb myminio/videos
+## Capacity Calculation
 
-# Make it public (optional)
-mc anonymous set download myminio/videos
+| Nodes | Disks/Node | Disk Size | Raw | EC | Usable |
+|-------|------------|-----------|-----|-----|--------|
+| 4 | 1 | 10TB | 40TB | 2 | ~20TB |
+| 4 | 4 | 10TB | 160TB | 8 | ~73TB |
+| 8 | 4 | 10TB | 320TB | 16 | ~146TB |
+| 10 | 4 | 10TB | 400TB | 20 | ~182TB |
+
+**Formula:** Usable ≈ Raw / 2.2 (with default EC)
+
+---
+
+## Mixed Disk Sizes (Different Pools)
+
+```properties
+# Pool 1: 4 nodes x 4 x 10TB = 160TB
+POOL1_START=1
+POOL1_END=4
+POOL1_DISKS=4
+POOL1_PATH=/mnt/disk
+
+# Pool 2: 4 nodes x 4 x 16TB = 256TB (bigger disks!)
+POOL2_START=5
+POOL2_END=8
+POOL2_DISKS=4
+POOL2_PATH=/mnt/disk
 ```
 
-## Usage
+MinIO จะกระจายไฟล์ใหม่ไป Pool ที่มีพื้นที่ว่างมากกว่า!
 
-### Upload Files
-
-```bash
-# Single file
-mc cp /path/to/video.mp4 myminio/videos/
-
-# Entire folder
-mc cp --recursive /path/to/folder/ myminio/videos/
-
-# Sync (like rsync)
-mc mirror /path/to/source/ myminio/videos/
-```
-
-### Access URLs
-
-- S3 API: http://minio1:9000 (or any node)
-- Console: http://minio1:9001
-
-### From Application
-
-```
-Endpoint: http://minio1:9000
-Access Key: admin
-Secret Key: YourSecurePassword123!
-Region: cloud
-```
-
-## Monitoring
-
-### Check Cluster Status
-```bash
-mc admin info myminio
-```
-
-### Check Drive Health
-```bash
-mc admin heal myminio --verbose
-```
-
-### View Logs
-```bash
-journalctl -u minio -f
-```
-
-## Maintenance
-
-### Replace Failed Drive
-
-1. Stop MinIO on affected node
-2. Replace physical drive
-3. Format and mount new drive
-4. Start MinIO - it will auto-heal
-
-### Add More Nodes (Expansion)
-
-MinIO supports adding server pools:
-
-```bash
-# Add 4 more nodes as a new pool
-# Edit /etc/default/minio on ALL nodes to include new pool
-```
+---
 
 ## Troubleshooting
 
-### MinIO Won't Start
-```bash
-# Check logs
-journalctl -u minio --no-pager | tail -50
+### Drive Not Detected
 
-# Common issues:
-# - /etc/hosts not configured on all nodes
-# - Drives not mounted
-# - Different credentials on nodes
+```bash
+# ตรวจสอบ drives
+lsblk
+fdisk -l
+
+# Check if mounted
+df -h /mnt/disk*
 ```
 
-### Slow Performance
-```bash
-# Check network between nodes
-iperf3 -s  # on one node
-iperf3 -c minio1  # from another
+### Permission Issues
 
-# Should be close to 1Gbps
+```bash
+# Set ownership
+sudo chown -R minio-user:minio-user /mnt/disk*
 ```
 
-### Healing After Drive Failure
+### Healing After Drive Replacement
+
 ```bash
+# Check heal status
+mc admin heal myminio --verbose
+
+# Force heal
 mc admin heal myminio --recursive
 ```

@@ -1,8 +1,6 @@
 # MinIO Distributed Cluster - Cloud Deployment
-## 4+ Nodes x 1 Disk per Node (No Docker)
 
 โปรเจคนี้สำหรับติดตั้ง MinIO Distributed Cluster บน Cloud VPS/Dedicated Servers
-โดยแต่ละ node มี disk เดียว
 
 ---
 
@@ -19,7 +17,7 @@
          ▼                        ▼                        ▼
    ┌──────────┐            ┌──────────┐            ┌──────────┐
    │  Node 1  │            │  Node 2  │            │  Node 3  │  ...
-   │  1 disk  │◄──────────▶│  1 disk  │◄──────────▶│  1 disk  │
+   │ 1-4 disk │◄──────────▶│ 1-4 disk │◄──────────▶│ 1-4 disk │
    │  :9000   │            │  :9000   │            │  :9000   │
    └──────────┘            └──────────┘            └──────────┘
         │                       │                       │
@@ -29,75 +27,94 @@
 
 ---
 
-## 📁 Files
+## 🚀 Quick Start
 
+### การติดตั้งใหม่
+
+```bash
+# 1. Clone repo
+git clone <repo> && cd minio-cloud
+
+# 2. แก้ไข config/pools.conf (ใส่ IP จริง)
+nano config/pools.conf
+
+# 3. ติดตั้งบนแต่ละ node
+# Node 1
+sudo ./install.sh --node 1 --ip 10.0.0.3
+
+# Node 2, 3, 4...
+sudo ./install.sh --node 2 --ip 10.0.0.5
+
+# 4. Start cluster
+./update-nodes.sh --start
 ```
-minio-cloud/
-├── README.md                    # This file
-├── install.sh                   # Main installation script
-├── add-node.sh                  # Add new node to cluster
-├── config/
-│   ├── minio.env.template       # Environment template
-│   └── minio.service            # Systemd service
-├── cloudflare/
-│   ├── setup-dns.md             # DNS configuration guide
-│   └── cache-rules.md           # Cache rules for HLS
-└── scripts/
-    ├── health-check.sh          # Health monitoring
-    └── backup-config.sh         # Backup cluster config
+
+### เพิ่ม Pool ใหม่
+
+```bash
+# 1. แก้ไข config/pools.conf (uncomment Pool 2)
+nano config/pools.conf
+
+# 2. ติดตั้งบน nodes ใหม่ (5-8)
+sudo ./install.sh --node 5 --ip 10.0.0.8
+
+# 3. อัพเดททุก node (เก่า + ใหม่)
+./update-nodes.sh --dry-run    # ดูก่อน
+./update-nodes.sh --restart    # รันจริง
 ```
 
 ---
 
-## 🚀 Quick Start
+## 📁 Files
 
-### Step 1: Clone และ Configure
-
-```bash
-# บน node แรก
-git clone <repo> && cd minio-cloud
-
-# แก้ไข config
-cp config/minio.env.template config/minio.env
-nano config/minio.env
+```
+minio-cloud/
+├── config/
+│   └── pools.conf           # ⭐ ไฟล์หลัก! กำหนด Pools + IPs
+│
+├── install.sh               # ติดตั้ง MinIO (1 disk/node)
+├── install-multi-drive.sh   # ติดตั้ง MinIO (หลาย disk/node)
+├── update-nodes.sh          # ⭐ อัพเดททุก node ตาม pools.conf
+│
+├── docs/
+│   ├── installation.md      # คู่มือติดตั้ง
+│   ├── expansion.md         # คู่มือเพิ่ม Pool
+│   └── ...
+│
+└── scripts/
+    ├── health-check.sh      # ตรวจสอบ cluster
+    └── setup-drives.sh      # Format และ mount disks
 ```
 
-### Step 2: ติดตั้ง (รันบนทุก node)
+---
 
-```bash
-# Node 1
-sudo ./install.sh --node 1 --total 4 --ip 10.0.0.1
+## 🔧 Commands
 
-# Node 2
-sudo ./install.sh --node 2 --total 4 --ip 10.0.0.2
-
-# ... และต่อไป
-```
-
-### Step 3: Start Cluster
-
-```bash
-# รันบนทุก node พร้อมกัน
-sudo systemctl start minio
-```
+| คำสั่ง | ใช้ทำอะไร |
+|--------|----------|
+| `./install.sh` | ติดตั้ง MinIO บน node ใหม่ |
+| `./update-nodes.sh --dry-run` | ดูว่าจะอัพเดทอะไร |
+| `./update-nodes.sh --restart` | อัพเดท config + restart ทุก node |
+| `./update-nodes.sh --stop` | หยุด MinIO ทุก node |
+| `./update-nodes.sh --start` | เริ่ม MinIO ทุก node |
 
 ---
 
 ## 📖 Documentation
 
 - [Installation Guide](docs/installation.md)
-- [Hetzner Setup (Cloud & Robot)](docs/hetzner-setup.md)
-- [Cloudflare Setup](cloudflare/setup-dns.md)
-- [Expanding Cluster](docs/expansion.md)
+- [Expansion Guide](docs/expansion.md) - เพิ่ม Pool ใหม่
+- [Hetzner Setup](docs/hetzner-setup.md)
+- [Multi-Drive Setup](docs/multi-drive-setup.md)
 
 ---
 
-## ⚡ Minimum Requirements
+## ⚡ Requirements
 
-| Requirement | Value |
-|-------------|-------|
-| Nodes | 4+ (ต้องเป็นเลขคู่) |
-| Disk/Node | 1+ |
+| รายการ | ค่า |
+|--------|-----|
+| Nodes | 4+ (ต่อ Pool) |
+| Disk/Node | 1-16 |
 | RAM/Node | 4GB+ |
 | Network | Private network ระหว่าง nodes |
 | OS | Ubuntu 22.04/24.04, Debian 12 |

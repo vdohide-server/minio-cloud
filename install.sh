@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # MinIO Cloud Installation Script
-# For Distributed Cluster (1 disk per node)
+# For Distributed Cluster
 #
 # Usage:
-#   sudo ./install.sh --node 1 --total 4 --ip 10.0.0.1
-#   sudo ./install.sh --node 2 --total 4 --ip 10.0.0.2
+#   sudo ./install.sh --node 1 --ip 10.0.0.1
+#   sudo ./install.sh --node 2 --ip 10.0.0.2
 #
 
 set -e
@@ -14,13 +14,10 @@ set -e
 # Default Configuration
 # ============================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/config/minio.env"
+CONFIG_FILE="${SCRIPT_DIR}/config/pools.conf"
 
 NODE_NUM=""
-TOTAL_NODES=""
 NODE_IP=""
-DATA_PATH="/mnt/minio-data"
-DISK_SIZE_MB=20480  # 20GB default
 MINIO_USER="minio-user"
 MINIO_PORT=9000
 CONSOLE_PORT=9001
@@ -48,20 +45,8 @@ parse_args() {
                 NODE_NUM="$2"
                 shift 2
                 ;;
-            --total)
-                TOTAL_NODES="$2"
-                shift 2
-                ;;
             --ip)
                 NODE_IP="$2"
-                shift 2
-                ;;
-            --data-path)
-                DATA_PATH="$2"
-                shift 2
-                ;;
-            --disk-size)
-                DISK_SIZE_MB="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -78,19 +63,8 @@ parse_args() {
     if [[ -z "$NODE_NUM" ]]; then
         error "Missing --node"
     fi
-    if [[ -z "$TOTAL_NODES" ]]; then
-        error "Missing --total"
-    fi
     if [[ -z "$NODE_IP" ]]; then
         error "Missing --ip"
-    fi
-
-    # Validate values
-    if [[ "$TOTAL_NODES" -lt 4 ]]; then
-        error "Minimum 4 nodes required"
-    fi
-    if [[ "$NODE_NUM" -gt "$TOTAL_NODES" ]]; then
-        error "Node number cannot exceed total nodes"
     fi
 }
 
@@ -99,19 +73,19 @@ show_help() {
 MinIO Cloud Installation Script
 
 Usage:
-  sudo ./install.sh --node <num> --total <count> --ip <private_ip>
+  sudo ./install.sh --node <num> --ip <private_ip>
 
 Options:
-  --node       Node number (1, 2, 3, ...)
-  --total      Total number of nodes in cluster
+  --node       Node number (1, 2, 3, ...) - must match pools.conf
   --ip         Private IP of this node
-  --data-path  Data directory (default: /mnt/minio-data)
-  --disk-size  Virtual disk size in MB (default: 20480 = 20GB)
   --help       Show this help
 
 Example:
-  sudo ./install.sh --node 1 --total 4 --ip 10.0.0.1
-  sudo ./install.sh --node 2 --total 4 --ip 10.0.0.2
+  sudo ./install.sh --node 1 --ip 10.0.0.3
+  sudo ./install.sh --node 2 --ip 10.0.0.5
+
+Note:
+  Pool configuration is read from config/pools.conf
 EOF
 }
 
@@ -173,61 +147,50 @@ install_mc() {
 }
 
 # ============================
-# Setup Virtual Disk (Loopback)
-# ============================
-setup_virtual_disk() {
-    log "Setting up virtual disk for MinIO storage..."
-
-    DISK_IMG="/minio-disk.img"
-
-    # Check if already mounted
-    if mountpoint -q "$DATA_PATH"; then
-        log "Data path ${DATA_PATH} is already mounted"
-        return 0
-    fi
-
-    # Create disk image if not exists
-    if [[ ! -f "$DISK_IMG" ]]; then
-        log "Creating ${DISK_SIZE_MB}MB virtual disk..."
-        dd if=/dev/zero of="$DISK_IMG" bs=1M count="$DISK_SIZE_MB" status=progress
-        mkfs.xfs "$DISK_IMG"
-        log "Virtual disk created and formatted with XFS"
-    else
-        log "Virtual disk already exists: ${DISK_IMG}"
-    fi
-
-    # Create mount point
-    mkdir -p "$DATA_PATH"
-
-    # Mount
-    mount -o loop "$DISK_IMG" "$DATA_PATH"
-    log "Mounted ${DISK_IMG} to ${DATA_PATH}"
-
-    # Add to fstab for persistence
-    if ! grep -q "$DISK_IMG" /etc/fstab; then
-        echo "${DISK_IMG} ${DATA_PATH} xfs loop 0 0" >> /etc/fstab
-        log "Added to /etc/fstab for auto-mount on boot"
-    fi
-
-    # Set permissions
-    chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH"
-
-    log "Virtual disk setup complete"
-}
-
-# ============================
 # Setup Data Directory
 # ============================
 setup_data_dir() {
+    # Load pools.conf to get data path
+    source "$CONFIG_FILE"
+    
+    # Find which pool this node belongs to
+    local POOL_NUM=1
+    local DATA_PATH="/mnt/minio-data"
+    local DISKS=1
+    
+    while true; do
+        local START_VAR="POOL${POOL_NUM}_START"
+        local END_VAR="POOL${POOL_NUM}_END"
+        local PATH_VAR="POOL${POOL_NUM}_PATH"
+        local DISKS_VAR="POOL${POOL_NUM}_DISKS"
+        
+        if [[ -z "${!START_VAR}" ]]; then
+            break
+        fi
+        
+        if [[ $NODE_NUM -ge ${!START_VAR} && $NODE_NUM -le ${!END_VAR} ]]; then
+            DATA_PATH="${!PATH_VAR:-/mnt/minio-data}"
+            DISKS="${!DISKS_VAR:-1}"
+            break
+        fi
+        
+        POOL_NUM=$((POOL_NUM + 1))
+    done
+    
     log "Setting up data directory: ${DATA_PATH}..."
 
-    # Create directory
-    mkdir -p "$DATA_PATH"
+    # Create directories based on disk count
+    if [[ $DISKS -eq 1 ]]; then
+        mkdir -p "$DATA_PATH"
+        chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH" 2>/dev/null || true
+    else
+        for i in $(seq 1 $DISKS); do
+            mkdir -p "${DATA_PATH}/disk${i}"
+            chown -R ${MINIO_USER}:${MINIO_USER} "${DATA_PATH}/disk${i}" 2>/dev/null || true
+        done
+    fi
 
-    # Set permissions
-    chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH" 2>/dev/null || true
-
-    log "Data directory ready"
+    log "Data directory ready (${DISKS} disk(s))"
 }
 
 # ============================
@@ -243,9 +206,6 @@ create_user() {
         useradd -M -r -g "$MINIO_USER" "$MINIO_USER"
         log "User ${MINIO_USER} created"
     fi
-
-    # Set ownership
-    chown -R ${MINIO_USER}:${MINIO_USER} "$DATA_PATH"
 }
 
 # ============================
@@ -257,27 +217,22 @@ generate_hosts() {
     # Backup
     cp /etc/hosts /etc/hosts.bak.$(date +%Y%m%d%H%M%S)
 
-    # Read IP mappings from config if exists
-    if [[ -f "${SCRIPT_DIR}/config/nodes.txt" ]]; then
-        while IFS='=' read -r node ip; do
-            # Skip comments and empty lines
-            [[ "$node" =~ ^#.*$ ]] && continue
-            [[ -z "$node" ]] && continue
-            if ! grep -q "$node" /etc/hosts; then
-                echo "$ip $node" >> /etc/hosts
+    # Read IP mappings from pools.conf
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+        
+        # Add entries from NODE*_IP variables
+        for i in $(seq 1 20); do
+            IP_VAR="NODE${i}_IP"
+            if [[ -n "${!IP_VAR}" ]]; then
+                if ! grep -q "minio${i}" /etc/hosts; then
+                    echo "${!IP_VAR} minio${i}" >> /etc/hosts
+                    log "Added minio${i} (${!IP_VAR}) to /etc/hosts"
+                fi
             fi
-        done < "${SCRIPT_DIR}/config/nodes.txt"
+        done
     else
-        # Generate template
-        warn "Creating nodes.txt template. Please edit with actual IPs!"
-        cat > "${SCRIPT_DIR}/config/nodes.txt" << EOF
-# Format: hostname=ip
-# Edit this file with your actual node IPs
-minio1=10.0.0.1
-minio2=10.0.0.2
-minio3=10.0.0.3
-minio4=10.0.0.4
-EOF
+        error "Config file not found: $CONFIG_FILE"
     fi
 
     log "Hosts file configured"
@@ -289,56 +244,83 @@ EOF
 create_config() {
     log "Creating MinIO configuration..."
 
-    # Generate volumes string for distributed mode
-    # Format: http://minio{1...N}/mnt/minio-data
-    VOLUMES="http://minio{1...${TOTAL_NODES}}${DATA_PATH}"
-
-    # Load credentials from config or use defaults
-    if [[ -f "$CONFIG_FILE" ]]; then
-        source "$CONFIG_FILE"
-    else
-        MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
-        MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -base64 24)}"
-
-        # Save generated password
-        mkdir -p "$(dirname "$CONFIG_FILE")"
-        cat > "$CONFIG_FILE" << EOF
-# MinIO Configuration
-# Generated on $(date)
-
-MINIO_ROOT_USER=${MINIO_ROOT_USER}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-
-# Cluster settings
-TOTAL_NODES=${TOTAL_NODES}
-
-# Site settings
-MINIO_SITE_REGION=cloud
-MINIO_SITE_NAME=minio-cluster
-EOF
-        chmod 600 "$CONFIG_FILE"
-        warn "Generated new credentials. Save this file: ${CONFIG_FILE}"
+    # Load from pools.conf
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Config file not found: $CONFIG_FILE"
     fi
+    source "$CONFIG_FILE"
+
+    # ============================
+    # Parse Pools from Config (same logic as update-nodes.sh)
+    # ============================
+    declare -a POOLS
+    local POOL_NUM=1
+    
+    while true; do
+        local START_VAR="POOL${POOL_NUM}_START"
+        local END_VAR="POOL${POOL_NUM}_END"
+        local DISKS_VAR="POOL${POOL_NUM}_DISKS"
+        local PATH_VAR="POOL${POOL_NUM}_PATH"
+        
+        if [[ -z "${!START_VAR}" ]]; then
+            break
+        fi
+        
+        local START=${!START_VAR}
+        local END=${!END_VAR}
+        local DISKS=${!DISKS_VAR:-1}
+        local POOL_PATH=${!PATH_VAR:-/mnt/minio-data}
+        
+        # Generate pool volume string
+        if [[ $DISKS -eq 1 ]]; then
+            POOLS+=("http://minio{${START}...${END}}:9000${POOL_PATH}")
+        else
+            POOLS+=("http://minio{${START}...${END}}:9000${POOL_PATH}/disk{1...${DISKS}}")
+        fi
+        
+        POOL_NUM=$((POOL_NUM + 1))
+    done
+
+    if [[ ${#POOLS[@]} -eq 0 ]]; then
+        error "No pools defined in $CONFIG_FILE"
+    fi
+
+    # Join pools into MINIO_VOLUMES string
+    local MINIO_VOLUMES=""
+    for pool in "${POOLS[@]}"; do
+        if [[ -z "$MINIO_VOLUMES" ]]; then
+            MINIO_VOLUMES="$pool"
+        else
+            MINIO_VOLUMES="$MINIO_VOLUMES $pool"
+        fi
+    done
+
+    # Use credentials from pools.conf
+    MINIO_ROOT_USER="${MINIO_ROOT_USER:-admin}"
+    MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-changeme123}"
+    MINIO_SITE_REGION="${MINIO_SITE_REGION:-cloud}"
+    MINIO_SITE_NAME="${MINIO_SITE_NAME:-minio-cluster}"
 
     # Create systemd environment file
     cat > /etc/default/minio << EOF
 # MinIO Distributed Configuration
-# Node: ${NODE_NUM} of ${TOTAL_NODES}
+# Node: ${NODE_NUM}
+# Pools: ${#POOLS[@]}
 # Generated: $(date)
 
 # Credentials (same on all nodes!)
 MINIO_ROOT_USER=${MINIO_ROOT_USER}
 MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
 
-# Distributed volumes: 1 disk per node
-MINIO_VOLUMES="${VOLUMES}"
+# Distributed volumes
+MINIO_VOLUMES="${MINIO_VOLUMES}"
 
 # Console
 MINIO_OPTS="--console-address :${CONSOLE_PORT}"
 
 # Site
-MINIO_SITE_REGION=cloud
-MINIO_SITE_NAME=minio-cluster
+MINIO_SITE_REGION=${MINIO_SITE_REGION}
+MINIO_SITE_NAME=${MINIO_SITE_NAME}
 
 # Prometheus (optional)
 MINIO_PROMETHEUS_AUTH_TYPE=public
@@ -347,6 +329,7 @@ EOF
     chmod 600 /etc/default/minio
 
     log "Configuration created at /etc/default/minio"
+    log "Pools: ${#POOLS[@]}, Volumes: ${MINIO_VOLUMES}"
 }
 
 # ============================
@@ -451,28 +434,23 @@ print_summary() {
     echo -e "${GREEN}MinIO Installation Complete!${NC}"
     echo "=========================================="
     echo ""
-    echo "Node: ${NODE_NUM} of ${TOTAL_NODES}"
+    echo "Node: minio${NODE_NUM}"
     echo "IP: ${NODE_IP}"
-    echo "Data Path: ${DATA_PATH}"
+    echo "Config: ${CONFIG_FILE}"
     echo ""
-    echo "Credentials saved in: ${CONFIG_FILE}"
+    echo -e "${YELLOW}Next Steps:${NC}"
     echo ""
-    echo -e "${YELLOW}IMPORTANT: Next Steps${NC}"
+    echo "1. Run this script on ALL other nodes"
     echo ""
-    echo "1. Edit /etc/hosts on ALL nodes:"
-    echo "   Add entries for minio1, minio2, minio3, minio4"
-    echo ""
-    echo "2. Copy ${CONFIG_FILE} to all nodes"
-    echo "   (credentials must be identical)"
-    echo ""
-    echo "3. Run this script on other nodes"
-    echo ""
-    echo "4. Start MinIO on ALL nodes simultaneously:"
+    echo "2. Start MinIO on ALL nodes:"
     echo "   sudo systemctl start minio"
     echo ""
-    echo "5. Check status:"
+    echo "3. Check status:"
     echo "   sudo systemctl status minio"
     echo "   sudo journalctl -u minio -f"
+    echo ""
+    echo "4. Or use update-nodes.sh to manage all nodes:"
+    echo "   ./update-nodes.sh --restart"
     echo ""
     echo "=========================================="
 }
@@ -486,7 +464,7 @@ main() {
     echo ""
     echo "=========================================="
     echo "MinIO Cloud Installation"
-    echo "Node: ${NODE_NUM} of ${TOTAL_NODES}"
+    echo "Node: minio${NODE_NUM}"
     echo "=========================================="
     echo ""
 
@@ -494,8 +472,8 @@ main() {
     install_deps
     install_minio
     install_mc
-    setup_virtual_disk
     create_user
+    setup_data_dir
     generate_hosts
     create_config
     create_service

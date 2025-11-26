@@ -15,21 +15,24 @@ set -e
 # ============================================
 # Configuration
 # ============================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/config/pools.conf"
+
 MINIO_USER="minio-user"
 MINIO_GROUP="minio-user"
 MINIO_BINARY_URL="https://dl.min.io/server/minio/release/linux-amd64/minio"
 MC_BINARY_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
 
-# Defaults
+# Defaults (can be overridden by pools.conf)
 NODE_NUMBER=""
 TOTAL_NODES="10"
 PRIVATE_IP=""
 DRIVE_COUNT="4"
 MOUNT_PREFIX="/mnt/disk"
 
-# Credentials (CHANGE THESE!)
+# Credentials (loaded from pools.conf)
 MINIO_ROOT_USER="admin"
-MINIO_ROOT_PASSWORD="ChangeMe123!"
+MINIO_ROOT_PASSWORD="changeme123"
 MINIO_REGION="cloud"
 
 # Colors
@@ -239,29 +242,23 @@ install_mc() {
 configure_hosts() {
     log_info "Configuring /etc/hosts..."
 
-    # Add this node's entry
-    if ! grep -q "minio${NODE_NUMBER}" /etc/hosts; then
-        echo "${PRIVATE_IP} minio${NODE_NUMBER}" >> /etc/hosts
-        log_success "Added minio${NODE_NUMBER} to /etc/hosts"
-    else
-        log_warn "minio${NODE_NUMBER} already in /etc/hosts"
+    # Load pools.conf
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
     fi
 
-    echo ""
-    echo "=========================================="
-    echo -e "${YELLOW}IMPORTANT: Add other nodes to /etc/hosts${NC}"
-    echo "=========================================="
-    echo ""
-    echo "Add these entries on ALL nodes:"
-    echo ""
-    for i in $(seq 1 $TOTAL_NODES); do
-        if [[ $i -eq $NODE_NUMBER ]]; then
-            echo "  ${PRIVATE_IP} minio${i}  (this node)"
-        else
-            echo "  <ip-of-node-${i}> minio${i}"
+    # Add all node entries from pools.conf
+    for i in $(seq 1 20); do
+        IP_VAR="NODE${i}_IP"
+        if [[ -n "${!IP_VAR}" ]]; then
+            if ! grep -q "minio${i}" /etc/hosts; then
+                echo "${!IP_VAR} minio${i}" >> /etc/hosts
+                log_success "Added minio${i} (${!IP_VAR}) to /etc/hosts"
+            fi
         fi
     done
-    echo ""
+
+    log_success "/etc/hosts configured"
 }
 
 # ============================================
@@ -269,6 +266,11 @@ configure_hosts() {
 # ============================================
 create_env_file() {
     log_info "Creating MinIO environment file..."
+
+    # Load credentials from pools.conf
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    fi
 
     # Build volumes string: http://minio{1...N}:9000/mnt/disk{1...M}/minio
     local volumes="http://minio{1...${TOTAL_NODES}}:9000${MOUNT_PREFIX}{1...${DRIVE_COUNT}}/minio"
@@ -293,8 +295,8 @@ MINIO_CONSOLE_ADDRESS=":9001"
 MINIO_BROWSER_REDIRECT_URL="http://minio${NODE_NUMBER}:9001"
 
 # Site settings
-MINIO_SITE_REGION=${MINIO_REGION}
-MINIO_SITE_NAME=minio-cluster
+MINIO_SITE_REGION=${MINIO_SITE_REGION:-cloud}
+MINIO_SITE_NAME=${MINIO_SITE_NAME:-minio-cluster}
 
 # Performance tuning for video storage
 MINIO_API_REQUESTS_MAX=10000

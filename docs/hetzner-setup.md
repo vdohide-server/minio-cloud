@@ -1,482 +1,221 @@
 # Hetzner Setup Guide for MinIO
-## Cloud VPS และ Robot (Dedicated/Auction Servers)
-
----
 
 ## 📋 Overview
 
 | Type | Hetzner Cloud | Hetzner Robot (Dedicated) |
 |------|---------------|---------------------------|
 | Console | console.hetzner.cloud | robot.hetzner.com |
-| Private Network | vSwitch (auto) | vSwitch (manual) |
+| Private Network | Cloud Network (auto) | vSwitch (manual VLAN) |
 | Pricing | Per hour | Per month |
 | Best for | Testing, small scale | Production, large storage |
 
 ---
 
-# Part 1: Hetzner Cloud (VPS)
+## Part 1: Hetzner Cloud (VPS)
 
-## 🔧 Step 1: สร้าง Private Network
+### Step 1: Create Private Network
 
-### 1.1 Login to Hetzner Cloud Console
-
-```
-URL: https://console.hetzner.cloud
-```
-
-### 1.2 Create Network
-
-1. เลือก **Project** ของคุณ
-2. ไปที่เมนู **Networks** (ซ้ายมือ)
-3. Click **Create Network**
+1. Login to [console.hetzner.cloud](https://console.hetzner.cloud)
+2. ไปที่ **Networks** → **Create Network**
 
 ```
-┌─────────────────────────────────────────┐
-│         Create Network                   │
-├─────────────────────────────────────────┤
-│ Name:        minio-network              │
-│ IP Range:    10.0.0.0/16                │
-│ Labels:      env=production             │
-└─────────────────────────────────────────┘
+Name:      minio-network
+IP Range:  10.0.0.0/16
 ```
 
-4. Click **Create Network**
-
-### 1.3 Add Subnet
-
-1. Click ที่ Network ที่สร้าง
-2. Click **Add Subnet**
-
+3. **Add Subnet:**
 ```
-┌─────────────────────────────────────────┐
-│           Add Subnet                     │
-├─────────────────────────────────────────┤
-│ Type:           Cloud                   │
-│ Network Zone:   eu-central              │
-│ IP Range:       10.0.0.0/24             │
-└─────────────────────────────────────────┘
+Type:           Cloud
+Network Zone:   eu-central
+IP Range:       10.0.0.0/24
 ```
 
----
-
-## 🖥️ Step 2: สร้าง Servers
-
-### 2.1 Create Server
+### Step 2: Create Servers
 
 1. ไปที่ **Servers** → **Add Server**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Create Server                             │
-├─────────────────────────────────────────────────────────────┤
-│ Location:        Falkenstein (fsn1) หรือ Nuremberg (nbg1)   │
-│                                                              │
-│ Image:           Ubuntu 24.04                                │
-│                                                              │
-│ Type:            CPX31 (4 vCPU, 8GB RAM, 160GB)             │
-│                  หรือใหญ่กว่าตามต้องการ                        │
-│                                                              │
-│ Networking:                                                  │
-│   ☑ Public IPv4                                             │
-│   ☑ Private Network: minio-network                          │
-│       IP: 10.0.0.1 (กำหนดเอง)                                │
-│                                                              │
-│ SSH Keys:        เลือก SSH key ของคุณ                        │
-│                                                              │
-│ Name:            minio1                                      │
-└─────────────────────────────────────────────────────────────┘
+Location:    Falkenstein (fsn1) หรือ Nuremberg (nbg1)
+Image:       Ubuntu 24.04
+Type:        CPX31 (4 vCPU, 8GB RAM) หรือใหญ่กว่า
+
+Networking:
+  ☑ Public IPv4
+  ☑ Private Network: minio-network
+      IP: 10.0.0.3 (กำหนดเอง)
+
+SSH Keys:    เลือก SSH key ของคุณ
+Name:        minio1
 ```
 
-### 2.2 สร้าง Server ทั้ง 4 ตัว
+2. สร้าง 4 servers:
 
 | Server | Private IP | Name |
 |--------|------------|------|
-| Server 1 | 10.0.0.1 | minio1 |
-| Server 2 | 10.0.0.2 | minio2 |
-| Server 3 | 10.0.0.3 | minio3 |
-| Server 4 | 10.0.0.4 | minio4 |
+| 1 | 10.0.0.3 | minio1 |
+| 2 | 10.0.0.5 | minio2 |
+| 3 | 10.0.0.4 | minio3 |
+| 4 | 10.0.0.2 | minio4 |
 
----
-
-## 💾 Step 3: เพิ่ม Volume (Block Storage)
+### Step 3: Add Volume (Optional)
 
 ถ้าต้องการ storage เพิ่ม:
 
-1. ไปที่ **Volumes** → **Create Volume**
-
+1. **Volumes** → **Create Volume**
 ```
-┌─────────────────────────────────────────┐
-│           Create Volume                  │
-├─────────────────────────────────────────┤
-│ Name:            minio1-data            │
-│ Size:            1000 GB (หรือมากกว่า)   │
-│ Location:        Same as server         │
-│ Automount:       ☑ (mount to /mnt/data) │
-│ Format:          xfs                    │
-│ Server:          minio1                 │
-└─────────────────────────────────────────┘
+Name:       minio1-data
+Size:       1000 GB
+Automount:  ☑ (mount to /mnt/data)
+Format:     xfs
+Server:     minio1
 ```
 
-2. ทำซ้ำสำหรับทุก server
+### Step 4: Firewall
+
+1. **Firewalls** → **Create Firewall**
+
+```
+Inbound Rules:
+  SSH          TCP    22      Any (0.0.0.0/0)
+  MinIO API    TCP    9000    Any (0.0.0.0/0)
+  MinIO Console TCP   9001    Any (0.0.0.0/0)
+  Internal     TCP    Any     10.0.0.0/24
+
+Apply to: minio1, minio2, minio3, minio4
+```
 
 ---
 
-## ✅ Step 4: ตรวจสอบ Network
+## Part 2: Hetzner Robot (Dedicated Servers)
 
-SSH เข้าแต่ละ server:
+### Step 1: Order Servers
+
+ไปที่ [hetzner.com/sb](https://www.hetzner.com/sb) (Server Auction)
+
+**Recommended Specs:**
+```
+AX41-NVMe:
+  CPU:     AMD Ryzen 5 3600
+  RAM:     64 GB DDR4
+  Disk:    2 x 512GB NVMe
+  Price:   ~€35-45/month
+```
+
+### Step 2: Create vSwitch
+
+1. Login to [robot.hetzner.com](https://robot.hetzner.com)
+2. ไปที่ **Servers** → เลือก Server → **vSwitch**
+3. **Create vSwitch**
+
+```
+Name:      minio-vswitch
+VLAN ID:   4000
+```
+
+4. **Add all servers** to vSwitch
+
+### Step 3: Configure VLAN on Each Server
+
+**Ubuntu 22.04/24.04 (Netplan):**
 
 ```bash
-# ดู network interfaces
-ip addr show
-
-# ควรเห็น:
-# eth0: Public IP (เช่น 65.21.xxx.xxx)
-# ens10: Private IP (เช่น 10.0.0.1)
-
-# ทดสอบ connectivity
-ping 10.0.0.2    # จาก minio1 ไป minio2
-ping 10.0.0.3    # จาก minio1 ไป minio3
-ping 10.0.0.4    # จาก minio1 ไป minio4
-```
-
----
-
-## 🔥 Step 5: Firewall Rules
-
-### 5.1 Create Firewall ใน Console
-
-1. ไปที่ **Firewalls** → **Create Firewall**
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Firewall Rules                            │
-├─────────────────────────────────────────────────────────────┤
-│ Inbound Rules:                                               │
-│                                                              │
-│ ┌─────────────────────────────────────────────────────────┐ │
-│ │ SSH          TCP    22      Any (0.0.0.0/0)            │ │
-│ │ MinIO API    TCP    9000    Any (0.0.0.0/0)            │ │
-│ │ MinIO Console TCP   9001    Any (0.0.0.0/0)            │ │
-│ │ Internal     TCP    Any     10.0.0.0/24 (Private only) │ │
-│ └─────────────────────────────────────────────────────────┘ │
-│                                                              │
-│ Apply to:  minio1, minio2, minio3, minio4                   │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-# Part 2: Hetzner Robot (Dedicated/Auction Servers)
-
-## 🔧 Step 1: สั่งซื้อ Servers
-
-### 1.1 Server Auction
-
-```
-URL: https://www.hetzner.com/sb
-```
-
-เลือก server ที่มี:
-- CPU: Intel/AMD (ตามต้องการ)
-- RAM: 32GB+ (แนะนำ)
-- Disk: 1+ disks สำหรับ data
-
-### 1.2 ตัวอย่าง Specs ที่เหมาะ
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Example: AX41-NVMe (Auction)                                │
-├─────────────────────────────────────────────────────────────┤
-│  CPU:     AMD Ryzen 5 3600                                  │
-│  RAM:     64 GB DDR4                                        │
-│  Disk:    2 x 512GB NVMe (OS + Data)                        │
-│  Network: 1 Gbit/s                                          │
-│  Price:   ~€35-45/month                                     │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│  Example: AX102 (For large storage)                          │
-├─────────────────────────────────────────────────────────────┤
-│  CPU:     AMD Ryzen 9 5950X                                 │
-│  RAM:     128 GB DDR4                                       │
-│  Disk:    2 x 1.92TB NVMe                                   │
-│  Network: 1 Gbit/s                                          │
-│  Price:   ~€85/month                                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🌐 Step 2: สร้าง vSwitch (Private Network)
-
-### 2.1 Login to Hetzner Robot
-
-```
-URL: https://robot.hetzner.com
-```
-
-### 2.2 Create vSwitch
-
-1. ไปที่ **Servers** → เลือก Server ตัวแรก
-2. ไปที่ tab **vSwitch**
-3. Click **Create vSwitch**
-
-```
-┌─────────────────────────────────────────┐
-│         Create vSwitch                   │
-├─────────────────────────────────────────┤
-│ Name:        minio-vswitch              │
-│ VLAN ID:     4000                       │
-└─────────────────────────────────────────┘
-```
-
-### 2.3 Add Servers to vSwitch
-
-1. Click ที่ vSwitch ที่สร้าง
-2. **Add Server** → เลือกทุก server ที่ต้องการ
-
-```
-┌─────────────────────────────────────────┐
-│      Servers in vSwitch                  │
-├─────────────────────────────────────────┤
-│ ☑ server1.example.com                   │
-│ ☑ server2.example.com                   │
-│ ☑ server3.example.com                   │
-│ ☑ server4.example.com                   │
-└─────────────────────────────────────────┘
-```
-
----
-
-## 🔧 Step 3: Configure Network บน Server
-
-### 3.1 หา Network Interface
-
-```bash
-# SSH เข้า server
-ssh root@YOUR_SERVER_IP
-
-# ดู interfaces
-ip link show
-
-# ปกติจะเป็น:
-# enp0s31f6 หรือ eth0 = main interface
-```
-
-### 3.2 สร้าง VLAN Interface
-
-#### Ubuntu 22.04/24.04 (Netplan)
-
-```bash
-# สร้างไฟล์ config
 sudo nano /etc/netplan/99-vswitch.yaml
 ```
 
 ```yaml
-# /etc/netplan/99-vswitch.yaml
 network:
   version: 2
   vlans:
     vlan4000:
       id: 4000
-      link: enp0s31f6    # ← เปลี่ยนตาม interface ของคุณ
+      link: enp0s31f6    # ← ใช้ interface หลักของ server
       mtu: 1400
       addresses:
-        - 10.0.0.1/24    # ← Node 1: 10.0.0.1, Node 2: 10.0.0.2, etc.
+        - 10.0.0.3/24    # ← เปลี่ยนตาม node
 ```
 
 ```bash
-# Apply config
 sudo netplan apply
-
-# ตรวจสอบ
-ip addr show vlan4000
 ```
 
-#### Debian 12 (interfaces)
-
-```bash
-# แก้ไข /etc/network/interfaces
-sudo nano /etc/network/interfaces
-```
-
-```
-# /etc/network/interfaces
-# เพิ่มท้ายไฟล์:
-
-auto vlan4000
-iface vlan4000 inet static
-    address 10.0.0.1/24     # ← เปลี่ยนตาม node
-    vlan-raw-device enp0s31f6
-    mtu 1400
-```
-
-```bash
-# Restart networking
-sudo systemctl restart networking
-
-# หรือ
-sudo ifup vlan4000
-```
-
-### 3.3 ทำซ้ำบนทุก Server
+**IP Assignments:**
 
 | Server | VLAN IP |
 |--------|---------|
-| Server 1 | 10.0.0.1/24 |
-| Server 2 | 10.0.0.2/24 |
-| Server 3 | 10.0.0.3/24 |
-| Server 4 | 10.0.0.4/24 |
+| 1 | 10.0.0.3/24 |
+| 2 | 10.0.0.5/24 |
+| 3 | 10.0.0.4/24 |
+| 4 | 10.0.0.2/24 |
 
----
-
-## ✅ Step 4: ตรวจสอบ Connectivity
+### Step 4: Test Connectivity
 
 ```bash
-# จาก Server 1
-ping 10.0.0.2
-ping 10.0.0.3
-ping 10.0.0.4
-
-# ควรได้ผลลัพธ์:
-# PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.
-# 64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.5 ms
+ping 10.0.0.5   # from node 1 to node 2
 ```
 
 ---
 
-## 🔥 Step 5: Firewall (iptables)
+## Part 3: After Network Setup
+
+### Update pools.conf
+
+```properties
+NODE1_IP=10.0.0.3
+NODE2_IP=10.0.0.5
+NODE3_IP=10.0.0.4
+NODE4_IP=10.0.0.2
+```
+
+### Install MinIO
 
 ```bash
-# Allow MinIO ports from private network
-sudo iptables -A INPUT -s 10.0.0.0/24 -p tcp --dport 9000 -j ACCEPT
-sudo iptables -A INPUT -s 10.0.0.0/24 -p tcp --dport 9001 -j ACCEPT
+# On each node
+git clone https://github.com/vdohide-server/minio-cloud.git
+cd minio-cloud
 
-# Allow from public (Cloudflare IPs)
-# ดู Cloudflare IPs: https://www.cloudflare.com/ips/
-sudo iptables -A INPUT -s 173.245.48.0/20 -p tcp --dport 9000 -j ACCEPT
-sudo iptables -A INPUT -s 103.21.244.0/22 -p tcp --dport 9000 -j ACCEPT
-# ... เพิ่ม Cloudflare IP ranges อื่นๆ
+# Edit config
+nano config/pools.conf
 
-# Save rules
-sudo apt install iptables-persistent -y
-sudo netfilter-persistent save
+# Install
+sudo ./install.sh --node 1 --ip 10.0.0.3
 ```
 
 ---
 
-## 💾 Step 6: Prepare Data Disk
-
-### ถ้ามี disk แยกสำหรับ data:
-
-```bash
-# ดู disks
-lsblk
-
-# ตัวอย่าง output:
-# sda     500G  ← OS disk
-# sdb     2T    ← Data disk
-
-# Format (ถ้าเป็น disk ใหม่)
-sudo mkfs.xfs /dev/sdb
-
-# สร้าง mount point
-sudo mkdir -p /mnt/minio-data
-
-# Mount
-sudo mount /dev/sdb /mnt/minio-data
-
-# Add to fstab
-echo '/dev/sdb /mnt/minio-data xfs defaults,noatime 0 2' | sudo tee -a /etc/fstab
-
-# ตรวจสอบ
-df -h /mnt/minio-data
-```
-
----
-
-# Part 3: Network Diagram
+## Network Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Internet                                   │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-                        ┌───────┴───────┐
+                        ┌───────────────┐
                         │  Cloudflare   │
-                        │  (CDN + DNS)  │
                         └───────┬───────┘
                                 │
         ┌───────────────────────┼───────────────────────┐
         │                       │                       │
-        ▼ Public IP             ▼ Public IP             ▼ Public IP
+        ▼ Public IP             ▼                       ▼
    ┌─────────────┐        ┌─────────────┐        ┌─────────────┐
-   │   minio1    │        │   minio2    │        │   minio3    │  ...
+   │   minio1    │        │   minio2    │        │   minio3    │
    │ 65.21.x.x   │        │ 65.21.x.x   │        │ 65.21.x.x   │
    ├─────────────┤        ├─────────────┤        ├─────────────┤
-   │  10.0.0.1   │◄──────▶│  10.0.0.2   │◄──────▶│  10.0.0.3   │
+   │  10.0.0.3   │◄──────▶│  10.0.0.5   │◄──────▶│  10.0.0.4   │
    └─────────────┘        └─────────────┘        └─────────────┘
          │                      │                      │
          └──────────────────────┴──────────────────────┘
                     Private Network / vSwitch
-                    
-   ┌─────────────────────────────────────────────────────────────┐
-   │  Hetzner Cloud: Uses "Private Networks" (automatic VLAN)    │
-   │  Hetzner Robot: Uses "vSwitch" (manual VLAN configuration)  │
-   └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-# Part 4: Quick Comparison
+## Checklist
 
-| Feature | Hetzner Cloud | Hetzner Robot |
-|---------|---------------|---------------|
-| Private Network | Auto (built-in) | Manual (vSwitch + VLAN) |
-| Network Speed | 10 Gbps internal | 1 Gbps (vSwitch) |
-| Setup Time | Minutes | Hours |
-| Monthly Cost | Higher per TB | Lower per TB |
-| Best For | Dev/Test, Small prod | Large storage, Production |
-
----
-
-# Part 5: Final Checklist
-
-## Hetzner Cloud Checklist
-
-- [ ] Created Private Network (10.0.0.0/16)
-- [ ] Created Subnet (10.0.0.0/24)
+### Hetzner Cloud
+- [ ] Created Private Network
 - [ ] Created 4 Servers in same location
-- [ ] Attached all servers to Private Network
-- [ ] Assigned Private IPs (10.0.0.1-4)
-- [ ] Created/Attached Volumes for data
-- [ ] Configured Firewall rules
+- [ ] Assigned Private IPs
+- [ ] Configured Firewall
 - [ ] Tested ping between nodes
 
-## Hetzner Robot Checklist
-
-- [ ] Ordered 4 dedicated servers
-- [ ] Created vSwitch with VLAN ID
-- [ ] Added all servers to vSwitch
+### Hetzner Robot
+- [ ] Ordered servers
+- [ ] Created vSwitch
 - [ ] Configured VLAN interface on each server
-- [ ] Assigned Private IPs (10.0.0.1-4)
-- [ ] Formatted and mounted data disks
-- [ ] Configured iptables firewall
 - [ ] Tested ping between nodes
-
----
-
-## 🚀 Next Step
-
-หลังจาก setup network เสร็จ:
-
-```bash
-# Clone repo
-git clone <repo> && cd minio-cloud
-
-# Edit node IPs
-nano config/nodes.txt
-
-# Run installation
-sudo ./install.sh --node 1 --total 4 --ip 10.0.0.1
-```
