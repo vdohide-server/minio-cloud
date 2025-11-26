@@ -116,14 +116,19 @@ install_deps() {
 install_minio() {
     log "Installing MinIO..."
 
-    # Download latest MinIO
-    MINIO_URL="https://dl.min.io/server/minio/release/linux-amd64/minio"
+    # Use local binary from scripts folder
+    LOCAL_MINIO="${SCRIPT_DIR}/scripts/minio"
 
-    if [[ -f /usr/local/bin/minio ]]; then
-        warn "MinIO binary already exists, updating..."
+    if [[ -f "$LOCAL_MINIO" ]]; then
+        log "Using local MinIO binary: ${LOCAL_MINIO}"
+        cp "$LOCAL_MINIO" /usr/local/bin/minio
+    else
+        # Fallback to download
+        warn "Local binary not found, downloading..."
+        MINIO_URL="https://dl.min.io/server/minio/release/linux-amd64/minio"
+        wget -q "$MINIO_URL" -O /usr/local/bin/minio
     fi
 
-    wget -q "$MINIO_URL" -O /usr/local/bin/minio
     chmod +x /usr/local/bin/minio
 
     # Verify installation
@@ -138,9 +143,19 @@ install_minio() {
 install_mc() {
     log "Installing MinIO Client (mc)..."
 
-    MC_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
+    # Use local binary from scripts folder
+    LOCAL_MC="${SCRIPT_DIR}/scripts/mc"
 
-    wget -q "$MC_URL" -O /usr/local/bin/mc
+    if [[ -f "$LOCAL_MC" ]]; then
+        log "Using local mc binary: ${LOCAL_MC}"
+        cp "$LOCAL_MC" /usr/local/bin/mc
+    else
+        # Fallback to download
+        warn "Local binary not found, downloading..."
+        MC_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
+        wget -q "$MC_URL" -O /usr/local/bin/mc
+    fi
+
     chmod +x /usr/local/bin/mc
 
     log "MinIO Client installed"

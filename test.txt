@@ -10,10 +10,21 @@ sudo ./install.sh --node 3 --total 4 --ip 10.0.0.4
 # Node 4
 sudo ./install.sh --node 4 --total 4 --ip 10.0.0.2
 
+# SSH ไป node 5
+sudo ./install.sh --node 5 --ip 10.0.0.8
+
+# SSH ไป node 6
+sudo ./install.sh --node 6 --ip 10.0.0.7
+
+# SSH ไป node 7
+sudo ./install.sh --node 7 --ip 10.0.0.9
+
+# SSH ไป node 8
+sudo ./install.sh --node 8 --ip 10.0.0.6
+
 git clone https://github.com//vdohide-server/minio-cloud.git
 cd minio-cloud
 chmod +x *.sh scripts/*.sh
-cp config/minio.env.template config/minio.env
 
 
 mkdir -p /home/files
