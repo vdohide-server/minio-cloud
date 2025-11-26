@@ -1,0 +1,15 @@
+# MinIO binaries (too large for GitHub, backup only)
+scripts/minio
+scripts/mc
+
+# Test files
+test.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+*.swo
